@@ -1,0 +1,6 @@
+{
+  "name": "Kunlik Yordamchi",
+  "description": "Telegram ichida kundalik vazifalar, odatlar va maqsadlarni boshqarishga yordam beradigan shaxsiy yordamchi Mini App va bot interfeysi.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
