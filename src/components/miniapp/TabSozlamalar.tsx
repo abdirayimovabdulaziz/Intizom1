@@ -7,12 +7,7 @@ import {
   Check,
   Download,
   Upload,
-  Copy,
-  ExternalLink,
-  Bot,
   ArrowLeft,
-  Smartphone,
-  ShieldCheck,
 } from 'lucide-react';
 import { triggerHaptic } from '../../utils/telegram';
 
@@ -35,7 +30,6 @@ export const TabSozlamalar: React.FC = () => {
   const [monthlyExpenseBudget, setMonthlyExpenseBudget] = useState(settings.monthlyExpenseBudget || 3500000);
   const [reminderSound, setReminderSound] = useState(settings.reminderSound);
   const [isSaved, setIsSaved] = useState(false);
-  const [copiedUrl, setCopiedUrl] = useState(false);
   const [importStatus, setImportStatus] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -54,21 +48,6 @@ export const TabSozlamalar: React.FC = () => {
     triggerHaptic('success');
     setIsSaved(true);
     setTimeout(() => setIsSaved(false), 2500);
-  };
-
-  const getAppUrl = () => {
-    if (typeof window !== 'undefined') {
-      return window.location.origin;
-    }
-    return 'https://ais-dev-yjbl2hbg4eobrzrmuvgcnh-543072210204.asia-southeast1.run.app';
-  };
-
-  const handleCopyUrl = () => {
-    const url = getAppUrl();
-    navigator.clipboard.writeText(url);
-    triggerHaptic('success');
-    setCopiedUrl(true);
-    setTimeout(() => setCopiedUrl(false), 2500);
   };
 
   const handleFileImport = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -103,138 +82,8 @@ export const TabSozlamalar: React.FC = () => {
           <ArrowLeft className="w-4 h-4" />
         </button>
         <div>
-          <h2 className="text-lg font-bold text-slate-100">Sozlamalar & Botga Ulash</h2>
-          <p className="text-xs text-slate-400">Telegram Bot, ma'lumotlar zaxirasi va parametrlar</p>
-        </div>
-      </div>
-
-      {/* 1. REAL TELEGRAM BOTGA ULASH KARTASI */}
-      <div className="bg-gradient-to-br from-slate-900 via-slate-900 to-sky-950/40 border border-sky-500/30 rounded-2xl p-4 shadow-sm space-y-3.5">
-        <div className="flex items-center gap-2 pb-2 border-b border-slate-800/80">
-          <div className="w-8 h-8 rounded-xl bg-sky-500/20 text-sky-400 flex items-center justify-center border border-sky-500/30">
-            <Bot className="w-4 h-4" />
-          </div>
-          <div>
-            <h4 className="font-semibold text-sm text-slate-100">Telegram Botga Ulash (BotFather)</h4>
-            <p className="text-[11px] text-slate-400">Ushbu Mini App'ni o'zingizning haqiqiy Telegram botingizga ulash</p>
-          </div>
-        </div>
-
-        {/* WebApp URL Copy Box */}
-        <div>
-          <label className="block text-[11px] font-medium text-slate-300 mb-1">
-            Mini App WebApp Havolasi (BotFather uchun):
-          </label>
-          <div className="flex items-center gap-2">
-            <div className="flex-1 bg-slate-950/80 border border-slate-800 rounded-xl px-3 py-2 text-xs text-sky-300 font-mono truncate select-all">
-              {getAppUrl()}
-            </div>
-            <button
-              type="button"
-              onClick={handleCopyUrl}
-              className={`px-3 py-2 rounded-xl font-medium text-xs flex items-center gap-1.5 transition-all active:scale-95 shadow-sm min-h-[38px] ${
-                copiedUrl
-                  ? 'bg-emerald-600 text-white border border-emerald-500'
-                  : 'bg-sky-600 hover:bg-sky-500 text-white border border-sky-500/40'
-              }`}
-            >
-              {copiedUrl ? (
-                <>
-                  <Check className="w-3.5 h-3.5" />
-                  <span>Nusxalandi</span>
-                </>
-              ) : (
-                <>
-                  <Copy className="w-3.5 h-3.5" />
-                  <span>Nusxa olish</span>
-                </>
-              )}
-            </button>
-          </div>
-        </div>
-
-        {/* 3 Step Instruction */}
-        <div className="bg-slate-950/60 rounded-xl p-3 border border-slate-800/80 space-y-2 text-xs">
-          <div className="flex items-start gap-2">
-            <span className="w-5 h-5 rounded-full bg-sky-500/20 text-sky-400 font-bold text-[11px] flex items-center justify-center shrink-0 mt-0.5">
-              1
-            </span>
-            <p className="text-slate-300 leading-relaxed">
-              Telegram'da <span className="font-semibold text-sky-300">@BotFather</span> ga kiring va{' '}
-              <code className="bg-slate-800 px-1 py-0.5 rounded text-sky-200">/newbot</code> buyrug'i orqali yangi bot yarating.
-            </p>
-          </div>
-          <div className="flex items-start gap-2">
-            <span className="w-5 h-5 rounded-full bg-sky-500/20 text-sky-400 font-bold text-[11px] flex items-center justify-center shrink-0 mt-0.5">
-              2
-            </span>
-            <p className="text-slate-300 leading-relaxed">
-              Bot nomini yozib HTTP API tokenni oling (e.g. <code className="bg-slate-800 px-1 py-0.5 rounded text-slate-400">123456:ABC...</code>).
-            </p>
-          </div>
-          <div className="flex items-start gap-2">
-            <span className="w-5 h-5 rounded-full bg-sky-500/20 text-sky-400 font-bold text-[11px] flex items-center justify-center shrink-0 mt-0.5">
-              3
-            </span>
-            <p className="text-slate-300 leading-relaxed">
-              <span className="font-semibold text-sky-300">@BotFather</span> da{' '}
-              <code className="bg-slate-800 px-1 py-0.5 rounded text-sky-200">/newapp</code> buyrug'ini bering, botingizni tanlang va yuqoridagi nusxalangan havolani kiriting!
-            </p>
-          </div>
-        </div>
-      </div>
-
-      {/* 2. MA'LUMOTLAR ZAXIRASI VA TIKLASH (EXPORT / IMPORT) */}
-      <div className="bg-slate-900/80 border border-slate-700/80 rounded-2xl p-4 shadow-sm space-y-3">
-        <div className="flex items-center gap-2 pb-1 border-b border-slate-800">
-          <Download className="w-4 h-4 text-emerald-400" />
-          <h4 className="font-semibold text-sm text-slate-100">Zaxira Nusxa & Tiklash (Backup / Restore)</h4>
-        </div>
-
-        <p className="text-xs text-slate-400 leading-relaxed">
-          Kiritilgan barcha vazifalar, odatlar va xarajatlarni JSON fayl qilib yuklab olish yoki avvalgi nusxadan tiklash.
-        </p>
-
-        {importStatus && (
-          <div className="p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-xl text-xs text-emerald-300 flex items-center gap-2">
-            <Check className="w-4 h-4 shrink-0 text-emerald-400" />
-            <span>{importStatus}</span>
-          </div>
-        )}
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-          <button
-            type="button"
-            onClick={() => {
-              triggerHaptic('light');
-              exportAllDataAsJson();
-            }}
-            className="w-full bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/40 font-semibold text-xs py-2.5 px-3 rounded-xl flex items-center justify-center gap-2 transition-all active:scale-98 shadow-sm"
-          >
-            <Download className="w-4 h-4" />
-            <span>Yuklab olish (.JSON)</span>
-          </button>
-
-          <div>
-            <input
-              type="file"
-              ref={fileInputRef}
-              onChange={handleFileImport}
-              accept=".json"
-              className="hidden"
-            />
-            <button
-              type="button"
-              onClick={() => {
-                triggerHaptic('light');
-                fileInputRef.current?.click();
-              }}
-              className="w-full bg-sky-600/20 hover:bg-sky-600/30 text-sky-300 border border-sky-500/40 font-semibold text-xs py-2.5 px-3 rounded-xl flex items-center justify-center gap-2 transition-all active:scale-98 shadow-sm"
-            >
-              <Upload className="w-4 h-4" />
-              <span>Fayldan tiklash</span>
-            </button>
-          </div>
+          <h2 className="text-lg font-bold text-slate-100">Sozlamalar</h2>
+          <p className="text-xs text-slate-400">Shaxsiy profil, eslatmalar va ma'lumotlar</p>
         </div>
       </div>
 
@@ -373,6 +222,60 @@ export const TabSozlamalar: React.FC = () => {
           )}
         </button>
       </form>
+
+      {/* MA'LUMOTLAR ZAXIRASI VA TIKLASH (EXPORT / IMPORT) */}
+      <div className="bg-slate-900/80 border border-slate-700/80 rounded-2xl p-4 shadow-sm space-y-3">
+        <div className="flex items-center gap-2 pb-1 border-b border-slate-800">
+          <Download className="w-4 h-4 text-emerald-400" />
+          <h4 className="font-semibold text-sm text-slate-100">Zaxira Nusxa & Tiklash (Backup / Restore)</h4>
+        </div>
+
+        <p className="text-xs text-slate-400 leading-relaxed">
+          Kiritilgan barcha vazifalar, odatlar va xarajatlarni JSON fayl qilib yuklab olish yoki avvalgi nusxadan tiklash.
+        </p>
+
+        {importStatus && (
+          <div className="p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-xl text-xs text-emerald-300 flex items-center gap-2">
+            <Check className="w-4 h-4 shrink-0 text-emerald-400" />
+            <span>{importStatus}</span>
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+          <button
+            type="button"
+            onClick={() => {
+              triggerHaptic('light');
+              exportAllDataAsJson();
+            }}
+            className="w-full bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/40 font-semibold text-xs py-2.5 px-3 rounded-xl flex items-center justify-center gap-2 transition-all active:scale-98 shadow-sm"
+          >
+            <Download className="w-4 h-4" />
+            <span>Yuklab olish (.JSON)</span>
+          </button>
+
+          <div>
+            <input
+              type="file"
+              ref={fileInputRef}
+              onChange={handleFileImport}
+              accept=".json"
+              className="hidden"
+            />
+            <button
+              type="button"
+              onClick={() => {
+                triggerHaptic('light');
+                fileInputRef.current?.click();
+              }}
+              className="w-full bg-sky-600/20 hover:bg-sky-600/30 text-sky-300 border border-sky-500/40 font-semibold text-xs py-2.5 px-3 rounded-xl flex items-center justify-center gap-2 transition-all active:scale-98 shadow-sm"
+            >
+              <Upload className="w-4 h-4" />
+              <span>Fayldan tiklash</span>
+            </button>
+          </div>
+        </div>
+      </div>
 
       {/* 4. BOSH QILISH VA TOZALASH (CLEAN RESET) */}
       <div className="pt-2 border-t border-slate-800/80 space-y-2">

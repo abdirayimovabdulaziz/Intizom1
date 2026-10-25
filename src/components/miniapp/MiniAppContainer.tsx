@@ -11,18 +11,13 @@ import { TabSozlamalar } from './TabSozlamalar';
 import {
   Home,
   CheckSquare,
-  Repeat,
+  Calendar,
   Wallet,
   Target,
-  Calendar,
-  Settings,
-  X,
-  Bot,
-  Sparkles,
 } from 'lucide-react';
 
 export const MiniAppContainer: React.FC = () => {
-  const { activeTab, setActiveTab, tasks, setDisplayMode } = useApp();
+  const { activeTab, setActiveTab, tasks } = useApp();
 
   const [isAddTaskModalOpen, setIsAddTaskModalOpen] = useState(false);
   const [isAddHabitModalOpen, setIsAddHabitModalOpen] = useState(false);
@@ -41,56 +36,9 @@ export const MiniAppContainer: React.FC = () => {
   ];
 
   return (
-    <div className="flex flex-col h-full bg-[#0b132b] text-slate-100 rounded-3xl border border-slate-800/80 shadow-2xl overflow-hidden relative">
-      {/* Top Header Bar */}
-      <div className="bg-slate-900/90 backdrop-blur-md px-4 py-2.5 border-b border-slate-800/80 flex items-center justify-between shadow-sm shrink-0 z-10">
-        <div className="flex items-center gap-2.5">
-          <button
-            onClick={() => setDisplayMode('bot')}
-            className="text-slate-400 hover:text-white transition-colors p-1.5 rounded-lg hover:bg-slate-800/60 min-h-[44px] min-w-[44px] flex items-center justify-center"
-            title="Telegram Botga qaytish"
-          >
-            <X className="w-5 h-5" />
-          </button>
-          <div>
-            <div className="flex items-center gap-1.5">
-              <h2 className="font-bold text-sm text-white">Kunlik Yordamchi</h2>
-              <span className="text-[10px] bg-sky-500/20 text-sky-400 font-semibold px-2 py-0.5 rounded-full border border-sky-500/30">
-                Mini App
-              </span>
-            </div>
-            <p className="text-[11px] text-slate-400">Telegram WebApp</p>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-2">
-          {/* Settings button in header */}
-          <button
-            onClick={() => setActiveTab(activeTab === 'sozlamalar' ? 'bosh_sahifa' : 'sozlamalar')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-medium transition-all active:scale-95 shadow-sm min-h-[40px] ${
-              activeTab === 'sozlamalar'
-                ? 'bg-sky-500/20 text-sky-300 border-sky-500/40 shadow-sky-500/10'
-                : 'bg-slate-800/90 hover:bg-slate-700/90 text-slate-300 border-slate-700/70'
-            }`}
-            title="Ilova sozlamalari"
-          >
-            <Settings className={`w-3.5 h-3.5 ${activeTab === 'sozlamalar' ? 'text-sky-400 animate-spin-slow' : 'text-slate-400'}`} />
-            <span className="text-xs">{activeTab === 'sozlamalar' ? 'Asosiy' : 'Sozlamalar'}</span>
-          </button>
-
-          <button
-            onClick={() => setDisplayMode('bot')}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800/90 hover:bg-slate-700/90 text-slate-200 border border-slate-700/70 text-xs font-medium transition-all active:scale-95 shadow-sm min-h-[40px]"
-            title="Telegram Bot chatiga o'tish"
-          >
-            <Bot className="w-3.5 h-3.5 text-sky-400" />
-            <span className="hidden sm:inline">Bot chat</span>
-          </button>
-        </div>
-      </div>
-
+    <div className="flex flex-col flex-1 w-full min-h-screen bg-[#090d16] text-slate-100 relative">
       {/* Main Tab Content Area with safe bottom spacing for floating nav */}
-      <div className="flex-1 overflow-y-auto p-4 sm:p-5 pb-28 sm:pb-32">
+      <div className="flex-1 overflow-y-auto px-4 py-3 sm:px-5 pb-28 sm:pb-32">
         {activeTab === 'bosh_sahifa' && (
           <TabBoshSahifa
             onOpenAddTask={() => {
