@@ -12,13 +12,14 @@ import {
   X,
   Tag,
   ArrowUpRight,
+  Pencil,
 } from 'lucide-react';
 
 export const TabHarajatlar: React.FC<{
   isAddModalOpen: boolean;
   setIsAddModalOpen: (open: boolean) => void;
 }> = ({ isAddModalOpen, setIsAddModalOpen }) => {
-  const { expenses, addExpense, deleteExpense, settings } = useApp();
+  const { expenses, addExpense, updateExpense, deleteExpense, settings } = useApp();
 
   const todayStr = formatDateYMD(new Date());
   const currentMonthStr = todayStr.slice(0, 7); // YYYY-MM
@@ -32,6 +33,41 @@ export const TabHarajatlar: React.FC<{
   const [category, setCategory] = useState<ExpenseCategory>('oziq_ovqat');
   const [date, setDate] = useState(todayStr);
   const [notes, setNotes] = useState('');
+
+  // Edit Expense Form State
+  const [editingExpense, setEditingExpense] = useState<(typeof expenses)[0] | null>(null);
+  const [editTitle, setEditTitle] = useState('');
+  const [editAmount, setEditAmount] = useState<number>(35000);
+  const [editCurrency, setEditCurrency] = useState<Currency>('UZS');
+  const [editCategory, setEditCategory] = useState<ExpenseCategory>('oziq_ovqat');
+  const [editDate, setEditDate] = useState(todayStr);
+  const [editNotes, setEditNotes] = useState('');
+
+  const openEditModal = (exp: (typeof expenses)[0]) => {
+    setEditingExpense(exp);
+    setEditTitle(exp.title);
+    setEditAmount(exp.amount);
+    setEditCurrency(exp.currency || 'UZS');
+    setEditCategory(exp.category || 'oziq_ovqat');
+    setEditDate(exp.date);
+    setEditNotes(exp.notes || '');
+  };
+
+  const handleUpdateExpense = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingExpense || !editTitle.trim()) return;
+
+    updateExpense(editingExpense.id, {
+      title: editTitle.trim(),
+      amount: Number(editAmount) || 0,
+      currency: editCurrency,
+      category: editCategory,
+      date: editDate,
+      notes: editNotes.trim() || undefined,
+    });
+
+    setEditingExpense(null);
+  };
 
   // Calculations (UZS and USD)
   const todayExpenses = expenses.filter(e => e.date === todayStr);
@@ -243,13 +279,20 @@ export const TabHarajatlar: React.FC<{
                   </div>
                 </div>
 
-                <div className="text-right shrink-0 flex items-center gap-3">
-                  <span className={`font-bold text-sm sm:text-base ${expCurrency === 'USD' ? 'text-emerald-400' : 'text-white'}`}>
+                <div className="text-right shrink-0 flex items-center gap-2">
+                  <span className={`font-bold text-sm sm:text-base mr-1 ${expCurrency === 'USD' ? 'text-emerald-400' : 'text-white'}`}>
                     -{formatMoney(exp.amount, expCurrency)}
                   </span>
                   <button
+                    onClick={() => openEditModal(exp)}
+                    className="text-slate-400 hover:text-sky-400 p-1.5 rounded-lg hover:bg-slate-800 transition-colors"
+                    title="O'zgartirish / Tahrirlash"
+                  >
+                    <Pencil className="w-4 h-4" />
+                  </button>
+                  <button
                     onClick={() => deleteExpense(exp.id)}
-                    className="text-slate-500 hover:text-rose-400 p-1 rounded-lg transition-colors"
+                    className="text-slate-500 hover:text-rose-400 p-1.5 rounded-lg hover:bg-slate-800 transition-colors"
                     title="O'chirish"
                   >
                     <Trash2 className="w-4 h-4" />
@@ -400,6 +443,157 @@ export const TabHarajatlar: React.FC<{
                   className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold py-2.5 rounded-xl shadow-md active:scale-95"
                 >
                   Saqlash
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Expense Modal */}
+      {editingExpense && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl w-full max-w-md p-5 shadow-2xl space-y-4 animate-in fade-in zoom-in-95 duration-200">
+            <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center">
+                  <Pencil className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base text-slate-100">Xarajatni Tahrirlash</h3>
+                  <p className="text-[11px] text-slate-400">Summa, valyuta yoki toifani to'g'irlash</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setEditingExpense(null)}
+                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleUpdateExpense} className="space-y-3.5">
+              {/* Title */}
+              <div>
+                <label className="block text-xs font-medium text-slate-300 mb-1">
+                  Xarajat nomi / Izoh *
+                </label>
+                <input
+                  type="text"
+                  value={editTitle}
+                  onChange={e => setEditTitle(e.target.value)}
+                  placeholder="Masalan: Tushlik, Benzin, Kitob xaridi"
+                  required
+                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-emerald-500"
+                />
+              </div>
+
+              {/* Amount & Currency Inline */}
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-xs font-medium text-slate-300">
+                    Summasi *
+                  </label>
+                  {/* Inline Currency Toggle */}
+                  <div className="inline-flex items-center bg-slate-800 p-0.5 rounded-lg border border-slate-700">
+                    <button
+                      type="button"
+                      onClick={() => setEditCurrency('UZS')}
+                      className={`px-2 py-0.5 text-[11px] font-semibold rounded-md transition-all ${
+                        editCurrency === 'UZS'
+                          ? 'bg-sky-600 text-white shadow-sm'
+                          : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      So'm (UZS)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditCurrency('USD')}
+                      className={`px-2 py-0.5 text-[11px] font-semibold rounded-md transition-all ${
+                        editCurrency === 'USD'
+                          ? 'bg-emerald-600 text-white shadow-sm'
+                          : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      Dollar ($)
+                    </button>
+                  </div>
+                </div>
+
+                <div className="relative">
+                  <input
+                    type="number"
+                    min={1}
+                    value={editAmount || ''}
+                    onChange={e => setEditAmount(Number(e.target.value))}
+                    placeholder="0"
+                    required
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl pl-3.5 pr-14 py-2.5 text-sm font-bold text-white focus:outline-none focus:border-emerald-500 font-mono"
+                  />
+                  <span className="absolute right-3.5 top-1/2 -translate-y-1/2 text-xs font-semibold text-slate-400">
+                    {editCurrency === 'USD' ? 'USD ($)' : 'so\'m'}
+                  </span>
+                </div>
+              </div>
+
+              {/* Category */}
+              <div>
+                <label className="block text-xs font-medium text-slate-300 mb-1">Toifa</label>
+                <select
+                  value={editCategory}
+                  onChange={e => setEditCategory(e.target.value as any)}
+                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-emerald-500"
+                >
+                  <option value="oziq_ovqat">Oziq-ovqat & Taom</option>
+                  <option value="transport">Transport & Benzin / Taksi</option>
+                  <option value="salomatlik">Salomatlik & Dori / Sport</option>
+                  <option value="talim">Ta'lim & Kitoblar</option>
+                  <option value="kommunal">Kommunal & Uy-ro'zg'or</option>
+                  <option value="shaxsiy">Shaxsiy & Xaridlar</option>
+                  <option value="biznes">Biznes & Ish harajatlari</option>
+                  <option value="boshqa">Boshqa xarajatlar</option>
+                </select>
+              </div>
+
+              {/* Date */}
+              <div>
+                <label className="block text-xs font-medium text-slate-300 mb-1">Sana</label>
+                <input
+                  type="date"
+                  value={editDate}
+                  onChange={e => setEditDate(e.target.value)}
+                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2 text-xs text-slate-100 focus:outline-none focus:border-emerald-500"
+                />
+              </div>
+
+              {/* Notes */}
+              <div>
+                <label className="block text-xs font-medium text-slate-300 mb-1">
+                  Izoh (Ixtiyoriy)
+                </label>
+                <input
+                  type="text"
+                  value={editNotes}
+                  onChange={e => setEditNotes(e.target.value)}
+                  placeholder="Do'kon yoki tafsilot..."
+                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-emerald-500"
+                />
+              </div>
+
+              <div className="pt-2 flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setEditingExpense(null)}
+                  className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium py-2.5 rounded-xl border border-slate-700"
+                >
+                  Bekor qilish
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold py-2.5 rounded-xl shadow-md active:scale-95"
+                >
+                  O'zgarishlarni Saqlash
                 </button>
               </div>
             </form>

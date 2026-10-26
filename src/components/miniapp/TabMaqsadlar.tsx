@@ -22,6 +22,7 @@ import {
   ChevronUp,
   Repeat,
   Target,
+  Pencil,
 } from 'lucide-react';
 import { TabOdatlar } from './TabOdatlar';
 
@@ -42,6 +43,7 @@ export const TabMaqsadlar: React.FC<{
     goals,
     habits,
     addGoal,
+    updateGoal,
     deleteGoal,
     restoreGoal,
     logGoalProgress,
@@ -69,6 +71,47 @@ export const TabMaqsadlar: React.FC<{
   const [unit, setUnit] = useState('bet');
   const [deadline, setDeadline] = useState(`${formatDateYMD(new Date()).slice(0, 7)}-30`);
   const [notes, setNotes] = useState('');
+
+  // Edit Goal Form State
+  const [editingGoal, setEditingGoal] = useState<(typeof goals)[0] | null>(null);
+  const [editTitle, setEditTitle] = useState('');
+  const [editGoalType, setEditGoalType] = useState<'reach' | 'decrease'>('reach');
+  const [editStartValue, setEditStartValue] = useState<number>(90);
+  const [editTargetValue, setEditTargetValue] = useState<number>(300);
+  const [editCurrentValue, setEditCurrentValue] = useState<number>(0);
+  const [editUnit, setEditUnit] = useState('bet');
+  const [editDeadline, setEditDeadline] = useState('');
+  const [editNotes, setEditNotes] = useState('');
+
+  const openEditModal = (goal: (typeof goals)[0]) => {
+    setEditingGoal(goal);
+    setEditTitle(goal.title);
+    setEditGoalType(goal.goalType || 'reach');
+    setEditStartValue(goal.startValue || 90);
+    setEditTargetValue(goal.targetValue);
+    setEditCurrentValue(goal.currentValue);
+    setEditUnit(goal.unit || 'birlik');
+    setEditDeadline(goal.deadline);
+    setEditNotes(goal.notes || '');
+  };
+
+  const handleUpdateGoal = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingGoal || !editTitle.trim()) return;
+
+    updateGoal(editingGoal.id, {
+      title: editTitle.trim(),
+      goalType: editGoalType,
+      startValue: editGoalType === 'decrease' ? Number(editStartValue) : undefined,
+      targetValue: Number(editTargetValue),
+      currentValue: Number(editCurrentValue),
+      unit: editUnit.trim() || 'birlik',
+      deadline: editDeadline,
+      notes: editNotes.trim() || undefined,
+    });
+
+    setEditingGoal(null);
+  };
 
   // Explicit Progress Log Modal
   const [selectedGoalIdForLog, setSelectedGoalIdForLog] = useState<string | null>(null);
@@ -339,13 +382,22 @@ export const TabMaqsadlar: React.FC<{
                         </button>
                       </>
                     ) : (
-                      <button
-                        onClick={() => deleteGoal(goal.id, false)}
-                        className="text-slate-500 hover:text-rose-400 p-1.5 rounded-lg transition-colors"
-                        title="Arxivga o'tkazish (saqlanib qoladi)"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                      <div className="flex items-center gap-1">
+                        <button
+                          onClick={() => openEditModal(goal)}
+                          className="text-slate-400 hover:text-sky-400 p-1.5 rounded-lg hover:bg-slate-800 transition-colors"
+                          title="O'zgartirish / Tahrirlash"
+                        >
+                          <Pencil className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => deleteGoal(goal.id, false)}
+                          className="text-slate-500 hover:text-rose-400 p-1.5 rounded-lg hover:bg-slate-800 transition-colors"
+                          title="Arxivga o'tkazish (saqlanib qoladi)"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
                     )}
                   </div>
                 </div>
@@ -901,6 +953,208 @@ export const TabMaqsadlar: React.FC<{
                   className="flex-1 bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold py-2.5 rounded-xl shadow-md active:scale-95"
                 >
                   Saqlash
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Goal Modal */}
+      {editingGoal && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl w-full max-w-md p-5 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto animate-in fade-in zoom-in-95 duration-200">
+            <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-xl bg-sky-500/20 text-sky-400 flex items-center justify-center">
+                  <Pencil className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base text-slate-100">Maqsadni Tahrirlash</h3>
+                  <p className="text-[11px] text-slate-400">Maqsad nomi, marrasi, joriy ko'rsatkichi yoki muddatini o'zgartirish</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setEditingGoal(null)}
+                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleUpdateGoal} className="space-y-3.5">
+              {/* Goal Type Switcher */}
+              <div>
+                <label className="block text-xs font-medium text-slate-300 mb-1.5">Maqsad yo'nalishi</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setEditGoalType('reach')}
+                    className={`py-2 px-3 rounded-xl text-xs font-semibold border flex items-center justify-center gap-1.5 transition-all ${
+                      editGoalType === 'reach'
+                        ? 'bg-sky-600 text-white border-transparent'
+                        : 'bg-slate-800 text-slate-400 border-slate-700'
+                    }`}
+                  >
+                    <TrendingUp className="w-3.5 h-3.5" />
+                    <span>Ortib boruvchi (Kitob, Daromad)</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setEditGoalType('decrease')}
+                    className={`py-2 px-3 rounded-xl text-xs font-semibold border flex items-center justify-center gap-1.5 transition-all ${
+                      editGoalType === 'decrease'
+                        ? 'bg-rose-600 text-white border-transparent'
+                        : 'bg-slate-800 text-slate-400 border-slate-700'
+                    }`}
+                  >
+                    <Scale className="w-3.5 h-3.5" />
+                    <span>Ozish / Kamaytirish (Vazn tashlash)</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Title */}
+              <div>
+                <label className="block text-xs font-medium text-slate-300 mb-1">
+                  Maqsad nomi *
+                </label>
+                <input
+                  type="text"
+                  value={editTitle}
+                  onChange={e => setEditTitle(e.target.value)}
+                  placeholder="Masalan: 300 bet kitob o'qish"
+                  required
+                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-sky-500"
+                />
+              </div>
+
+              {/* Targets, Starting and Current Values */}
+              {editGoalType === 'decrease' ? (
+                <div className="grid grid-cols-3 gap-2 bg-rose-950/20 border border-rose-500/20 p-3 rounded-xl">
+                  <div>
+                    <label className="block text-[11px] font-medium text-rose-300 mb-1">
+                      Boshlang'ich
+                    </label>
+                    <input
+                      type="number"
+                      step="any"
+                      value={editStartValue}
+                      onChange={e => setEditStartValue(Number(e.target.value))}
+                      className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-slate-100 font-mono"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-medium text-amber-300 mb-1">
+                      Hozirgi
+                    </label>
+                    <input
+                      type="number"
+                      step="any"
+                      value={editCurrentValue}
+                      onChange={e => setEditCurrentValue(Number(e.target.value))}
+                      className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-slate-100 font-mono"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-medium text-emerald-300 mb-1">
+                      Kutilayotgan
+                    </label>
+                    <input
+                      type="number"
+                      step="any"
+                      value={editTargetValue}
+                      onChange={e => setEditTargetValue(Number(e.target.value))}
+                      className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-slate-100 font-mono"
+                    />
+                  </div>
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 gap-3 bg-slate-800/60 p-3 rounded-xl border border-slate-700">
+                  <div>
+                    <label className="block text-xs font-medium text-slate-300 mb-1">
+                      Joriy natija
+                    </label>
+                    <input
+                      type="number"
+                      step="any"
+                      value={editCurrentValue}
+                      onChange={e => setEditCurrentValue(Number(e.target.value))}
+                      className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-slate-100 font-mono"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-slate-300 mb-1">
+                      Yakuniy Marra *
+                    </label>
+                    <input
+                      type="number"
+                      step="any"
+                      value={editTargetValue}
+                      onChange={e => setEditTargetValue(Number(e.target.value))}
+                      required
+                      className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-slate-100 font-mono"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Unit & Deadline */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-slate-300 mb-1">
+                    Birlik
+                  </label>
+                  <input
+                    type="text"
+                    value={editUnit}
+                    onChange={e => setEditUnit(e.target.value)}
+                    placeholder="bet, kg, $, km"
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-sky-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-slate-300 mb-1">
+                    Oxirgi muddat
+                  </label>
+                  <input
+                    type="date"
+                    value={editDeadline}
+                    onChange={e => setEditDeadline(e.target.value)}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-sky-500"
+                  />
+                </div>
+              </div>
+
+              {/* Notes */}
+              <div>
+                <label className="block text-xs font-medium text-slate-300 mb-1">
+                  Qaydlar (Ixtiyoriy)
+                </label>
+                <input
+                  type="text"
+                  value={editNotes}
+                  onChange={e => setEditNotes(e.target.value)}
+                  placeholder="Izoh yoki eslatmalar..."
+                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-sky-500"
+                />
+              </div>
+
+              <div className="pt-2 flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setEditingGoal(null)}
+                  className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium py-2.5 rounded-xl border border-slate-700"
+                >
+                  Bekor qilish
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold py-2.5 rounded-xl shadow-md active:scale-95"
+                >
+                  O'zgarishlarni Saqlash
                 </button>
               </div>
             </form>

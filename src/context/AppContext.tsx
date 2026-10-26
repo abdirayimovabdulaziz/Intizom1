@@ -36,11 +36,13 @@ interface AppContextType {
   deleteTask: (id: string, permanent?: boolean) => void;
   restoreTask: (id: string) => void;
   addHabit: (habit: Omit<Habit, 'id' | 'streak' | 'bestStreak' | 'history' | 'currentQuantityToday'>) => Habit;
+  updateHabit: (id: string, updates: Partial<Habit>) => void;
   toggleHabitToday: (id: string) => void;
   logHabitQuantity: (id: string, amount: number) => void;
   deleteHabit: (id: string, permanent?: boolean) => void;
   restoreHabit: (id: string) => void;
   addGoal: (goal: Omit<Goal, 'id' | 'status'>) => Goal;
+  updateGoal: (id: string, updates: Partial<Goal>) => void;
   updateGoalProgress: (id: string, deltaAmount: number) => void;
   logGoalProgress: (goalId: string, amount: number, note?: string) => void;
   addGoalInternalHabit: (goalId: string, title: string, targetFrequency: string) => void;
@@ -50,6 +52,7 @@ interface AppContextType {
   deleteGoal: (id: string, permanent?: boolean) => void;
   restoreGoal: (id: string) => void;
   addExpense: (expense: Omit<Expense, 'id'>) => Expense;
+  updateExpense: (id: string, updates: Partial<Expense>) => void;
   deleteExpense: (id: string) => void;
   exportAllDataAsJson: () => void;
   importDataFromJson: (jsonStr: string) => { success: boolean; message: string };
@@ -286,6 +289,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return habit;
   };
 
+  const updateHabit = (id: string, updates: Partial<Habit>) => {
+    setHabits(prev => prev.map(h => (h.id === id ? { ...h, ...updates } : h)));
+    triggerHaptic('light');
+  };
+
   const toggleHabitToday = (id: string) => {
     const today = formatDateYMD(new Date());
     setHabits(prev =>
@@ -382,6 +390,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
     setGoals(prev => [goal, ...prev]);
     return goal;
+  };
+
+  const updateGoal = (id: string, updates: Partial<Goal>) => {
+    setGoals(prev => prev.map(g => (g.id === id ? { ...g, ...updates } : g)));
+    triggerHaptic('light');
   };
 
   const updateGoalProgress = (id: string, deltaAmount: number) => {
@@ -565,6 +578,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setExpenses(prev => [expense, ...prev]);
     triggerHaptic('light');
     return expense;
+  };
+
+  const updateExpense = (id: string, updates: Partial<Expense>) => {
+    setExpenses(prev => prev.map(e => (e.id === id ? { ...e, ...updates } : e)));
+    triggerHaptic('light');
   };
 
   const deleteExpense = (id: string) => {
@@ -1543,11 +1561,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         deleteTask,
         restoreTask,
         addHabit,
+        updateHabit,
         toggleHabitToday,
         logHabitQuantity,
         deleteHabit,
         restoreHabit,
         addGoal,
+        updateGoal,
         updateGoalProgress,
         logGoalProgress,
         addGoalInternalHabit,
@@ -1557,6 +1577,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         deleteGoal,
         restoreGoal,
         addExpense,
+        updateExpense,
         deleteExpense,
         exportAllDataAsJson,
         importDataFromJson,

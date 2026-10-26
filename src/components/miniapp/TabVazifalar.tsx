@@ -22,6 +22,7 @@ import {
   Repeat,
   ChevronRight,
   Pill,
+  Pencil,
 } from 'lucide-react';
 export const TabVazifalar: React.FC<{
   isAddModalOpen: boolean;
@@ -51,6 +52,42 @@ export const TabVazifalar: React.FC<{
   const [category, setCategory] = useState<'vazifa' | 'uchrashuv'>('vazifa');
   const [priority, setPriority] = useState<TaskPriority>('medium');
   const [notes, setNotes] = useState('');
+
+  // Edit task state
+  const [editingTask, setEditingTask] = useState<Task | null>(null);
+  const [editTitle, setEditTitle] = useState('');
+  const [editDate, setEditDate] = useState(todayStr);
+  const [editTime, setEditTime] = useState('');
+  const [editCategory, setEditCategory] = useState<'vazifa' | 'uchrashuv'>('vazifa');
+  const [editPriority, setEditPriority] = useState<TaskPriority>('medium');
+  const [editNotes, setEditNotes] = useState('');
+
+  const openEditModal = (task: Task) => {
+    setEditingTask(task);
+    setEditTitle(task.title);
+    setEditDate(task.date);
+    setEditTime(task.time || '');
+    setEditCategory(task.category || 'vazifa');
+    setEditPriority(task.priority || 'medium');
+    setEditNotes(task.notes || '');
+    setActiveMenuTaskId(null);
+  };
+
+  const handleUpdateTask = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingTask || !editTitle.trim()) return;
+
+    updateTask(editingTask.id, {
+      title: editTitle.trim(),
+      date: editDate,
+      time: editTime.trim() || undefined,
+      category: editCategory,
+      priority: editPriority,
+      notes: editNotes.trim() || undefined,
+    });
+
+    setEditingTask(null);
+  };
 
   const filteredTasks = tasks.filter(task => {
     // Search query
@@ -332,8 +369,16 @@ export const TabVazifalar: React.FC<{
                     </div>
                   </div>
 
-                  {/* Actions Dropdown Toggle */}
-                  <div className="relative">
+                  {/* Actions Dropdown & Quick Edit Toggle */}
+                  <div className="flex items-center gap-1 relative">
+                    <button
+                      onClick={() => openEditModal(task)}
+                      className="text-slate-400 hover:text-sky-400 p-1.5 rounded-lg hover:bg-slate-800 transition-colors"
+                      title="O'zgartirish / Tahrirlash"
+                    >
+                      <Pencil className="w-4 h-4" />
+                    </button>
+
                     <button
                       onClick={() =>
                         setActiveMenuTaskId(activeMenuTaskId === task.id ? null : task.id)
@@ -344,7 +389,15 @@ export const TabVazifalar: React.FC<{
                     </button>
 
                     {activeMenuTaskId === task.id && (
-                      <div className="absolute right-0 top-8 z-20 w-44 bg-slate-800 border border-slate-700 rounded-xl shadow-2xl py-1 text-xs">
+                      <div className="absolute right-0 top-8 z-20 w-48 bg-slate-800 border border-slate-700 rounded-xl shadow-2xl py-1 text-xs">
+                        <button
+                          onClick={() => openEditModal(task)}
+                          className="w-full text-left px-3 py-2 text-sky-300 hover:bg-slate-700 flex items-center gap-2 font-medium"
+                        >
+                          <Pencil className="w-3.5 h-3.5 text-sky-400" />
+                          Tahrirlash / O'zgartirish
+                        </button>
+                        <div className="border-t border-slate-700/80 my-0.5" />
                         <button
                           onClick={() => {
                             postponeTask(task.id, 15);
@@ -534,6 +587,130 @@ export const TabVazifalar: React.FC<{
                   className="flex-1 bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold py-2.5 rounded-xl shadow-md active:scale-95"
                 >
                   Saqlash
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Task Modal */}
+      {editingTask && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl w-full max-w-md p-5 shadow-2xl space-y-4 animate-in fade-in zoom-in-95 duration-200">
+            <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-xl bg-sky-500/20 text-sky-400 flex items-center justify-center">
+                  <Pencil className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base text-slate-100">Vazifani Tahrirlash</h3>
+                  <p className="text-[11px] text-slate-400">Nomini yoki vaqtini to'g'irlash</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setEditingTask(null)}
+                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleUpdateTask} className="space-y-3.5">
+              {/* Title */}
+              <div>
+                <label className="block text-xs font-medium text-slate-300 mb-1">
+                  Vazifa nomi *
+                </label>
+                <input
+                  type="text"
+                  value={editTitle}
+                  onChange={e => setEditTitle(e.target.value)}
+                  placeholder="Vazifa nomini kiriting..."
+                  required
+                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-sky-500"
+                />
+              </div>
+
+              {/* Date */}
+              <div>
+                <label className="block text-xs font-medium text-slate-300 mb-1.5">Sana</label>
+                <input
+                  type="date"
+                  value={editDate}
+                  onChange={e => setEditDate(e.target.value)}
+                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2 text-xs text-slate-100 focus:outline-none focus:border-sky-500"
+                />
+              </div>
+
+              {/* Time */}
+              <div>
+                <label className="block text-xs font-medium text-slate-300 mb-1">
+                  Vaqt (Eslatma uchun)
+                </label>
+                <input
+                  type="time"
+                  value={editTime}
+                  onChange={e => setEditTime(e.target.value)}
+                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2 text-xs text-slate-100 focus:outline-none focus:border-sky-500"
+                />
+              </div>
+
+              {/* Category & Priority */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-slate-300 mb-1">Toifa</label>
+                  <select
+                    value={editCategory}
+                    onChange={e => setEditCategory(e.target.value as any)}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-sky-500"
+                  >
+                    <option value="vazifa">Vazifa (Topshiriq)</option>
+                    <option value="uchrashuv">Uchrashuv</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-slate-300 mb-1">Muhimlik</label>
+                  <select
+                    value={editPriority}
+                    onChange={e => setEditPriority(e.target.value as any)}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-sky-500"
+                  >
+                    <option value="low">Past</option>
+                    <option value="medium">O'rtacha</option>
+                    <option value="high">Yuqori</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Notes */}
+              <div>
+                <label className="block text-xs font-medium text-slate-300 mb-1">
+                  Izoh (Ixtiyoriy)
+                </label>
+                <input
+                  type="text"
+                  value={editNotes}
+                  onChange={e => setEditNotes(e.target.value)}
+                  placeholder="Qo'shimcha ma'lumotlar..."
+                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-sky-500"
+                />
+              </div>
+
+              <div className="pt-2 flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setEditingTask(null)}
+                  className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium py-2.5 rounded-xl border border-slate-700"
+                >
+                  Bekor qilish
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold py-2.5 rounded-xl shadow-md active:scale-95"
+                >
+                  O'zgarishlarni Saqlash
                 </button>
               </div>
             </form>

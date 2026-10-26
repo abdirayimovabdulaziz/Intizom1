@@ -580,67 +580,6 @@ export const TabBoshSahifa: React.FC<{
         )}
       </div>
 
-      {/* 9. TEZKOR SOZLAMALAR VA TIZIM */}
-      <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 shadow-sm space-y-3">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="w-7 h-7 rounded-lg bg-sky-500/20 text-sky-400 flex items-center justify-center">
-              <Settings className="w-4 h-4" />
-            </div>
-            <div>
-              <h4 className="font-semibold text-sm text-white">Sozlamalar va Boshqaruv</h4>
-              <p className="text-[11px] text-slate-400">Profil, bildirishnomalar va ma'lumotlar</p>
-            </div>
-          </div>
-          <button
-            onClick={() => setActiveTab('sozlamalar')}
-            className="text-xs text-sky-400 hover:text-sky-300 font-medium flex items-center gap-1 p-1 hover:underline"
-          >
-            <span>Barchasi</span>
-            <ChevronRight className="w-3.5 h-3.5" />
-          </button>
-        </div>
-
-        <div className="grid grid-cols-2 gap-2 text-xs">
-          <div className="p-2.5 rounded-xl bg-slate-950/60 border border-slate-800/80">
-            <span className="text-[10px] text-slate-400 block">Eslatma ovozlari</span>
-            <span className="font-medium text-slate-200 mt-0.5 block">
-              {settings.reminderSound ? '🔔 Yoqilgan' : '🔕 O\'chirilgan'}
-            </span>
-          </div>
-
-          <div className="p-2.5 rounded-xl bg-slate-950/60 border border-slate-800/80">
-            <span className="text-[10px] text-slate-400 block">Vaqt mintaqasi</span>
-            <span className="font-medium text-slate-200 mt-0.5 block truncate">
-              {settings.timezone.split(' ')[0]}
-            </span>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-2 pt-1 border-t border-slate-800/70">
-          <button
-            onClick={() => setActiveTab('sozlamalar')}
-            className="flex-1 py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium text-xs flex items-center justify-center gap-1.5 transition-all active:scale-95 border border-slate-700 min-h-[40px]"
-          >
-            <Settings className="w-3.5 h-3.5 text-slate-400" />
-            <span>Sozlamalarni ochish</span>
-          </button>
-
-          <button
-            onClick={() => {
-              exportAllDataAsJson();
-              setIsExportedToast(true);
-              setTimeout(() => setIsExportedToast(false), 3000);
-            }}
-            className="py-2 px-3 rounded-xl bg-sky-500/15 hover:bg-sky-500/25 text-sky-300 font-medium text-xs flex items-center justify-center gap-1.5 transition-all active:scale-95 border border-sky-500/30 min-h-[40px]"
-            title="Barcha ma'lumotlarni JSON fayl qilib yuklab olish"
-          >
-            <Download className="w-3.5 h-3.5 text-sky-400" />
-            <span>{isExportedToast ? "Yuklab olindi! ✅" : "Zaxira (JSON)"}</span>
-          </button>
-        </div>
-      </div>
-
       {/* Safe bottom spacer ensuring nothing is hidden behind floating nav */}
       <div className="h-6 shrink-0" aria-hidden="true" />
     </div>

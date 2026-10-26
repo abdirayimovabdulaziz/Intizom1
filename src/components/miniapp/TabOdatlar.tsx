@@ -14,13 +14,14 @@ import {
   Pill,
   Clock,
   Repeat,
+  Pencil,
 } from 'lucide-react';
 
 export const TabOdatlar: React.FC<{
   isAddModalOpen: boolean;
   setIsAddModalOpen: (open: boolean) => void;
 }> = ({ isAddModalOpen, setIsAddModalOpen }) => {
-  const { habits, goals, toggleHabitToday, logHabitQuantity, addHabit, deleteHabit } = useApp();
+  const { habits, goals, toggleHabitToday, logHabitQuantity, addHabit, updateHabit, deleteHabit } = useApp();
 
   const todayStr = formatDateYMD(new Date());
 
@@ -38,6 +39,62 @@ export const TabOdatlar: React.FC<{
   const [targetQuantity, setTargetQuantity] = useState<number>(1);
   const [unit, setUnit] = useState('marta');
   const [linkedGoalId, setLinkedGoalId] = useState<string>('');
+
+  // Edit Habit Form State
+  const [editingHabit, setEditingHabit] = useState<(typeof habits)[0] | null>(null);
+  const [editTitle, setEditTitle] = useState('');
+  const [editHabitType, setEditHabitType] = useState<HabitType>('general');
+  const [editDosage, setEditDosage] = useState('');
+  const [editTimeSlot, setEditTimeSlot] = useState('');
+  const [editFrequency, setEditFrequency] = useState<HabitFrequency>('daily');
+  const [editTargetDaysPerWeek, setEditTargetDaysPerWeek] = useState<number>(3);
+  const [editSelectedDays, setEditSelectedDays] = useState<number[]>([1]);
+  const [editHasQuantity, setEditHasQuantity] = useState(false);
+  const [editTargetQuantity, setEditTargetQuantity] = useState<number>(1);
+  const [editUnit, setEditUnit] = useState('marta');
+  const [editLinkedGoalId, setEditLinkedGoalId] = useState<string>('');
+
+  const openEditModal = (h: (typeof habits)[0]) => {
+    setEditingHabit(h);
+    setEditTitle(h.title);
+    setEditHabitType(h.habitType || 'general');
+    setEditDosage(h.dosage || '');
+    setEditTimeSlot(h.timeSlot || '');
+    setEditFrequency(h.frequency || 'daily');
+    setEditTargetDaysPerWeek(h.targetDaysPerWeek || 3);
+    setEditSelectedDays(h.daysOfWeek || [1]);
+    setEditHasQuantity(!!h.hasQuantity);
+    setEditTargetQuantity(h.targetQuantity || 1);
+    setEditUnit(h.unit || 'marta');
+    setEditLinkedGoalId(h.linkedGoalId || '');
+  };
+
+  const handleUpdateHabit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingHabit || !editTitle.trim()) return;
+
+    updateHabit(editingHabit.id, {
+      title: editTitle.trim(),
+      habitType: editHabitType,
+      dosage: editHabitType === 'supplement_health' ? editDosage.trim() : undefined,
+      timeSlot: editHabitType === 'supplement_health' ? editTimeSlot.trim() : undefined,
+      frequency: editFrequency,
+      targetDaysPerWeek: editFrequency === 'weekly_target' ? editTargetDaysPerWeek : undefined,
+      daysOfWeek: editFrequency === 'specific_days' ? editSelectedDays : undefined,
+      hasQuantity: editHasQuantity,
+      targetQuantity: editHasQuantity ? Number(editTargetQuantity) || 1 : undefined,
+      unit: editHasQuantity ? editUnit : undefined,
+      linkedGoalId: editLinkedGoalId || undefined,
+    });
+
+    setEditingHabit(null);
+  };
+
+  const toggleEditDay = (dayNum: number) => {
+    setEditSelectedDays(prev =>
+      prev.includes(dayNum) ? (prev.length > 1 ? prev.filter(d => d !== dayNum) : prev) : [...prev, dayNum].sort()
+    );
+  };
 
   const daysLabels = [
     { num: 1, label: 'Du' },
@@ -279,13 +336,22 @@ export const TabOdatlar: React.FC<{
                     </div>
                   </div>
 
-                  <button
-                    onClick={() => deleteHabit(habit.id)}
-                    className="text-slate-500 hover:text-rose-400 p-1 rounded-lg transition-colors"
-                    title="O'chirish"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => openEditModal(habit)}
+                      className="text-slate-400 hover:text-sky-400 p-1.5 rounded-lg hover:bg-slate-800 transition-colors"
+                      title="O'zgartirish / Tahrirlash"
+                    >
+                      <Pencil className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={() => deleteHabit(habit.id)}
+                      className="text-slate-500 hover:text-rose-400 p-1.5 rounded-lg hover:bg-slate-800 transition-colors"
+                      title="O'chirish"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
                 </div>
 
                 {/* Quantity Logger */}
@@ -637,6 +703,280 @@ export const TabOdatlar: React.FC<{
                   className="flex-1 bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold py-2.5 rounded-xl shadow-md active:scale-95"
                 >
                   Saqlash
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Habit Modal */}
+      {editingHabit && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl w-full max-w-md p-5 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto animate-in fade-in zoom-in-95 duration-200">
+            <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-xl bg-amber-500/20 text-amber-400 flex items-center justify-center">
+                  <Pencil className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base text-slate-100">Odatni Tahrirlash</h3>
+                  <p className="text-[11px] text-slate-400">Odat nomi, davriyligi va maqsadlarini o'zgartirish</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setEditingHabit(null)}
+                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleUpdateHabit} className="space-y-3.5">
+              {/* Habit Type Switcher */}
+              <div>
+                <label className="block text-xs font-medium text-slate-300 mb-1.5">Odat turi</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setEditHabitType('general')}
+                    className={`py-2 px-3 rounded-xl text-xs font-semibold border flex items-center justify-center gap-1.5 transition-all ${
+                      editHabitType === 'general'
+                        ? 'bg-sky-600 text-white border-transparent'
+                        : 'bg-slate-800 text-slate-400 border-slate-700'
+                    }`}
+                  >
+                    <Flame className="w-3.5 h-3.5" />
+                    <span>Umumiy Odat</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setEditHabitType('supplement_health')}
+                    className={`py-2 px-3 rounded-xl text-xs font-semibold border flex items-center justify-center gap-1.5 transition-all ${
+                      editHabitType === 'supplement_health'
+                        ? 'bg-emerald-600 text-white border-transparent'
+                        : 'bg-slate-800 text-slate-400 border-slate-700'
+                    }`}
+                  >
+                    <Pill className="w-3.5 h-3.5" />
+                    <span>Salomatlik / Qabul</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Title */}
+              <div>
+                <label className="block text-xs font-medium text-slate-300 mb-1">
+                  Odat nomi *
+                </label>
+                <input
+                  type="text"
+                  value={editTitle}
+                  onChange={e => setEditTitle(e.target.value)}
+                  placeholder="Masalan: Kitob o'qish yoki 5g kreatin"
+                  required
+                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-sky-500"
+                />
+              </div>
+
+              {/* Health supplement fields */}
+              {editHabitType === 'supplement_health' && (
+                <div className="grid grid-cols-2 gap-3 bg-emerald-950/20 border border-emerald-500/20 p-3 rounded-xl">
+                  <div>
+                    <label className="block text-xs font-medium text-emerald-300 mb-1">
+                      Doza (Miqdor)
+                    </label>
+                    <input
+                      type="text"
+                      value={editDosage}
+                      onChange={e => setEditDosage(e.target.value)}
+                      placeholder="Masalan: 5 gr, 1 tabletka"
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-slate-100 focus:outline-none focus:border-emerald-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-medium text-emerald-300 mb-1">
+                      Qabul vaqti
+                    </label>
+                    <input
+                      type="text"
+                      value={editTimeSlot}
+                      onChange={e => setEditTimeSlot(e.target.value)}
+                      placeholder="Masalan: Ertalab och qoringa"
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-slate-100 focus:outline-none focus:border-emerald-500"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Frequency Section */}
+              <div>
+                <label className="block text-xs font-medium text-slate-300 mb-1.5">Davriylik</label>
+                <div className="grid grid-cols-3 gap-1.5 mb-2.5">
+                  <button
+                    type="button"
+                    onClick={() => setEditFrequency('daily')}
+                    className={`py-2 px-1.5 rounded-xl text-xs font-medium border text-center transition-all ${
+                      editFrequency === 'daily'
+                        ? 'bg-sky-600 text-white border-transparent'
+                        : 'bg-slate-800 text-slate-400 border-slate-700'
+                    }`}
+                  >
+                    Har kuni
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEditFrequency('weekly_target')}
+                    className={`py-2 px-1.5 rounded-xl text-xs font-medium border text-center transition-all ${
+                      editFrequency === 'weekly_target'
+                        ? 'bg-sky-600 text-white border-transparent'
+                        : 'bg-slate-800 text-slate-400 border-slate-700'
+                    }`}
+                  >
+                    Haftada X marta
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEditFrequency('specific_days')}
+                    className={`py-2 px-1.5 rounded-xl text-xs font-medium border text-center transition-all ${
+                      editFrequency === 'specific_days'
+                        ? 'bg-sky-600 text-white border-transparent'
+                        : 'bg-slate-800 text-slate-400 border-slate-700'
+                    }`}
+                  >
+                    Muayyan kunlar
+                  </button>
+                </div>
+
+                {/* Specific days selector */}
+                {editFrequency === 'specific_days' && (
+                  <div className="bg-slate-800/80 p-2.5 rounded-xl border border-slate-700 mb-2">
+                    <span className="text-[11px] text-slate-400 block mb-1.5">Hafta kunlarini belgilang:</span>
+                    <div className="grid grid-cols-7 gap-1">
+                      {daysLabels.map(d => {
+                        const isSelected = editSelectedDays.includes(d.num);
+                        return (
+                          <button
+                            key={d.num}
+                            type="button"
+                            onClick={() => toggleEditDay(d.num)}
+                            className={`py-2 text-xs font-semibold rounded-lg border transition-all ${
+                              isSelected
+                                ? 'bg-sky-600 text-white border-sky-500 shadow-sm'
+                                : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200'
+                            }`}
+                          >
+                            {d.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* Weekly target number */}
+                {editFrequency === 'weekly_target' && (
+                  <div className="bg-slate-800/80 p-3 rounded-xl border border-slate-700 flex items-center justify-between gap-3 mb-2">
+                    <span className="text-xs text-slate-300">Haftada necha marta?</span>
+                    <div className="flex items-center gap-2">
+                      {[1, 2, 3, 4, 5, 6].map(num => (
+                        <button
+                          key={num}
+                          type="button"
+                          onClick={() => setEditTargetDaysPerWeek(num)}
+                          className={`w-7 h-7 rounded-lg text-xs font-bold border transition-colors ${
+                            editTargetDaysPerWeek === num
+                              ? 'bg-sky-600 text-white border-sky-500'
+                              : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200'
+                          }`}
+                        >
+                          {num}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Quantity Target Toggle */}
+              <div className="pt-1">
+                <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={editHasQuantity}
+                    onChange={e => setEditHasQuantity(e.target.checked)}
+                    className="w-4 h-4 rounded text-sky-600 bg-slate-800 border-slate-700 focus:ring-0"
+                  />
+                  <span>Kunlik miqdorni o'lchash (Masalan: 20 bet, 2 litr)</span>
+                </label>
+              </div>
+
+              {editHasQuantity && (
+                <div className="grid grid-cols-2 gap-3 bg-slate-800/60 p-3 rounded-xl border border-slate-700">
+                  <div>
+                    <label className="block text-xs font-medium text-slate-300 mb-1">
+                      Kunlik reja miqdori
+                    </label>
+                    <input
+                      type="number"
+                      min={1}
+                      value={editTargetQuantity}
+                      onChange={e => setEditTargetQuantity(Number(e.target.value))}
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-slate-100 focus:outline-none focus:border-sky-500 font-mono"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-medium text-slate-300 mb-1">
+                      O'lchov birligi
+                    </label>
+                    <input
+                      type="text"
+                      value={editUnit}
+                      onChange={e => setEditUnit(e.target.value)}
+                      placeholder="bet, litr, km, marta"
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-slate-100 focus:outline-none focus:border-sky-500"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Linked Goal */}
+              {goals.length > 0 && (
+                <div>
+                  <label className="block text-xs font-medium text-slate-300 mb-1">
+                    Katta Maqsadga bog'lash (Ixtiyoriy)
+                  </label>
+                  <select
+                    value={editLinkedGoalId}
+                    onChange={e => setEditLinkedGoalId(e.target.value)}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-sky-500"
+                  >
+                    <option value="">Bog'lanmagan</option>
+                    {goals.map(g => (
+                      <option key={g.id} value={g.id}>
+                        {g.title}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              <div className="pt-2 flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setEditingHabit(null)}
+                  className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium py-2.5 rounded-xl border border-slate-700"
+                >
+                  Bekor qilish
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold py-2.5 rounded-xl shadow-md active:scale-95"
+                >
+                  O'zgarishlarni Saqlash
                 </button>
               </div>
             </form>
