@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useContext, useEffect, useState, useReducer } from 'react';
 import {
   Task,
   Habit,
@@ -15,6 +15,15 @@ import {
 } from '../types';
 import { formatDateYMD, formatUzbekDateLabel, formatSom, formatMoney, parseUzbekIntent } from '../utils/uzbekNlp';
 import { triggerHaptic } from '../utils/telegram';
+import {
+  applyHabitQuantityChange,
+  applyHabitToggle,
+  calculateHabitStreakAndStats,
+  calculatePostponedTask,
+  generateEntityId,
+  getDateStringInTimezone,
+  getIanaTimezone,
+} from '../utils/domainCalculations';
 
 interface AppContextType {
   tasks: Task[];
@@ -77,10 +86,429 @@ const STORAGE_KEY_EXPENSES = 'kunlik_yordamchi_expenses_clean_v1';
 const STORAGE_KEY_MSGS = 'kunlik_yordamchi_messages_clean_v1';
 const STORAGE_KEY_SETTINGS = 'kunlik_yordamchi_settings_clean_v1';
 
-export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const todayStr = formatDateYMD(new Date());
+interface DomainState {
+  habits: Habit[];
+  goals: Goal[];
+}
 
-  // Clean empty defaults ready for user's personal usage
+type DomainAction =
+  | {
+      type: 'LOG_HABIT_QUANTITY';
+      habitId: string;
+      amount: number;
+      dateStr: string;
+      timestamp: string;
+    }
+  | {
+      type: 'TOGGLE_HABIT_TODAY';
+      habitId: string;
+      dateStr: string;
+      timestamp: string;
+    }
+  | {
+      type: 'SET_HABITS';
+      habits: Habit[] | ((prev: Habit[]) => Habit[]);
+    }
+  | {
+      type: 'ADD_HABIT';
+      habit: Habit;
+    }
+  | {
+      type: 'UPDATE_HABIT';
+      id: string;
+      updates: Partial<Habit>;
+      dateStr: string;
+    }
+  | {
+      type: 'DELETE_HABIT';
+      id: string;
+      permanent: boolean;
+    }
+  | {
+      type: 'RESTORE_HABIT';
+      id: string;
+    }
+  | {
+      type: 'SET_GOALS';
+      goals: Goal[] | ((prev: Goal[]) => Goal[]);
+    }
+  | {
+      type: 'ADD_GOAL';
+      goal: Goal;
+    }
+  | {
+      type: 'UPDATE_GOAL';
+      id: string;
+      updates: Partial<Goal>;
+    }
+  | {
+      type: 'UPDATE_GOAL_PROGRESS';
+      id: string;
+      deltaAmount: number;
+    }
+  | {
+      type: 'LOG_GOAL_PROGRESS';
+      goalId: string;
+      amount: number;
+      date: string;
+      time: string;
+      logId: string;
+      note?: string;
+    }
+  | {
+      type: 'DELETE_GOAL_PROGRESS_LOG';
+      goalId: string;
+      logId: string;
+    }
+  | {
+      type: 'ADD_GOAL_INTERNAL_HABIT';
+      goalId: string;
+      internalHabit: GoalInternalHabit;
+    }
+  | {
+      type: 'TOGGLE_GOAL_INTERNAL_HABIT';
+      goalId: string;
+      habitId: string;
+    }
+  | {
+      type: 'DELETE_GOAL_INTERNAL_HABIT';
+      goalId: string;
+      habitId: string;
+    }
+  | {
+      type: 'DELETE_GOAL';
+      id: string;
+      permanent: boolean;
+    }
+  | {
+      type: 'RESTORE_GOAL';
+      id: string;
+    }
+  | {
+      type: 'REFRESH_HABITS_DAILY_STATUS';
+      dateStr: string;
+    }
+  | {
+      type: 'RESET_DOMAIN';
+      habits: Habit[];
+      goals: Goal[];
+    };
+
+function domainReducer(state: DomainState, action: DomainAction): DomainState {
+  switch (action.type) {
+    case 'LOG_HABIT_QUANTITY': {
+      const targetHabit = state.habits.find(h => h.id === action.habitId);
+      if (!targetHabit) return state;
+
+      const linkedGoal = targetHabit.linkedGoalId
+        ? state.goals.find(g => g.id === targetHabit.linkedGoalId)
+        : undefined;
+
+      const { updatedHabit, updatedGoal } = applyHabitQuantityChange(
+        targetHabit,
+        linkedGoal,
+        action.amount,
+        action.dateStr,
+        action.timestamp
+      );
+
+      return {
+        ...state,
+        habits: state.habits.map(h => (h.id === action.habitId ? updatedHabit : h)),
+        goals: updatedGoal
+          ? state.goals.map(g => (g.id === updatedGoal.id ? updatedGoal : g))
+          : state.goals,
+      };
+    }
+
+    case 'TOGGLE_HABIT_TODAY': {
+      const targetHabit = state.habits.find(h => h.id === action.habitId);
+      if (!targetHabit) return state;
+
+      const linkedGoal = targetHabit.linkedGoalId
+        ? state.goals.find(g => g.id === targetHabit.linkedGoalId)
+        : undefined;
+
+      const { updatedHabit, updatedGoal } = applyHabitToggle(
+        targetHabit,
+        linkedGoal,
+        action.dateStr,
+        action.timestamp
+      );
+
+      return {
+        ...state,
+        habits: state.habits.map(h => (h.id === action.habitId ? updatedHabit : h)),
+        goals: updatedGoal
+          ? state.goals.map(g => (g.id === updatedGoal.id ? updatedGoal : g))
+          : state.goals,
+      };
+    }
+
+    case 'SET_HABITS': {
+      const nextHabits = typeof action.habits === 'function' ? action.habits(state.habits) : action.habits;
+      return { ...state, habits: nextHabits };
+    }
+
+    case 'ADD_HABIT': {
+      return {
+        ...state,
+        habits: [action.habit, ...state.habits],
+      };
+    }
+
+    case 'UPDATE_HABIT': {
+      return {
+        ...state,
+        habits: state.habits.map(h => {
+          if (h.id === action.id) {
+            const merged = { ...h, ...action.updates };
+            const stats = calculateHabitStreakAndStats(
+              merged.history || {},
+              merged.frequency,
+              merged.daysOfWeek,
+              merged.targetDaysPerWeek,
+              action.dateStr,
+              merged.bestStreak || 0
+            );
+            return {
+              ...merged,
+              streak: stats.streak,
+              bestStreak: stats.bestStreak,
+              currentQuantityToday: merged.history?.[action.dateStr]?.quantity ?? 0,
+            };
+          }
+          return h;
+        }),
+      };
+    }
+
+    case 'DELETE_HABIT': {
+      return {
+        ...state,
+        habits: action.permanent
+          ? state.habits.filter(h => h.id !== action.id)
+          : state.habits.map(h => (h.id === action.id ? { ...h, isArchived: true } : h)),
+      };
+    }
+
+    case 'RESTORE_HABIT': {
+      return {
+        ...state,
+        habits: state.habits.map(h => (h.id === action.id ? { ...h, isArchived: false } : h)),
+      };
+    }
+
+    case 'SET_GOALS': {
+      const nextGoals = typeof action.goals === 'function' ? action.goals(state.goals) : action.goals;
+      return { ...state, goals: nextGoals };
+    }
+
+    case 'ADD_GOAL': {
+      return {
+        ...state,
+        goals: [action.goal, ...state.goals],
+      };
+    }
+
+    case 'UPDATE_GOAL': {
+      return {
+        ...state,
+        goals: state.goals.map(g => (g.id === action.id ? { ...g, ...action.updates } : g)),
+      };
+    }
+
+    case 'UPDATE_GOAL_PROGRESS': {
+      return {
+        ...state,
+        goals: state.goals.map(g => {
+          if (g.id === action.id) {
+            const isDecrease = g.goalType === 'decrease';
+            const newVal = isDecrease
+              ? Math.max(0, g.currentValue - action.deltaAmount)
+              : Math.max(0, g.currentValue + action.deltaAmount);
+            const achieved = isDecrease ? newVal <= g.targetValue : newVal >= g.targetValue;
+            return {
+              ...g,
+              currentValue: newVal,
+              status: achieved ? 'achieved' : 'active',
+            };
+          }
+          return g;
+        }),
+      };
+    }
+
+    case 'LOG_GOAL_PROGRESS': {
+      return {
+        ...state,
+        goals: state.goals.map(g => {
+          if (g.id === action.goalId) {
+            const isDecrease = g.goalType === 'decrease';
+            const newVal = isDecrease
+              ? Math.max(0, g.currentValue - action.amount)
+              : Math.max(0, g.currentValue + action.amount);
+
+            const achieved = isDecrease ? newVal <= g.targetValue : newVal >= g.targetValue;
+            const remaining = isDecrease
+              ? Math.max(0, newVal - g.targetValue)
+              : Math.max(0, g.targetValue - newVal);
+
+            const newLog: GoalProgressLog = {
+              id: action.logId,
+              date: action.date,
+              time: action.time,
+              amount: action.amount,
+              note: action.note || undefined,
+              resultingCurrent: newVal,
+              resultingRemaining: remaining,
+            };
+
+            return {
+              ...g,
+              currentValue: newVal,
+              status: achieved ? 'achieved' : 'active',
+              progressLogs: [newLog, ...(g.progressLogs || [])],
+            };
+          }
+          return g;
+        }),
+      };
+    }
+
+    case 'DELETE_GOAL_PROGRESS_LOG': {
+      return {
+        ...state,
+        goals: state.goals.map(g => {
+          if (g.id === action.goalId && g.progressLogs) {
+            const targetLog = g.progressLogs.find(l => l.id === action.logId);
+            if (!targetLog) return g;
+
+            const isDecrease = g.goalType === 'decrease';
+            const revertedVal = isDecrease
+              ? g.currentValue + targetLog.amount
+              : Math.max(0, g.currentValue - targetLog.amount);
+
+            const achieved = isDecrease ? revertedVal <= g.targetValue : revertedVal >= g.targetValue;
+
+            return {
+              ...g,
+              currentValue: revertedVal,
+              status: achieved ? 'achieved' : 'active',
+              progressLogs: g.progressLogs.filter(l => l.id !== action.logId),
+            };
+          }
+          return g;
+        }),
+      };
+    }
+
+    case 'ADD_GOAL_INTERNAL_HABIT': {
+      return {
+        ...state,
+        goals: state.goals.map(g => {
+          if (g.id === action.goalId) {
+            return {
+              ...g,
+              internalHabits: [...(g.internalHabits || []), action.internalHabit],
+            };
+          }
+          return g;
+        }),
+      };
+    }
+
+    case 'TOGGLE_GOAL_INTERNAL_HABIT': {
+      return {
+        ...state,
+        goals: state.goals.map(g => {
+          if (g.id === action.goalId && g.internalHabits) {
+            return {
+              ...g,
+              internalHabits: g.internalHabits.map(h => {
+                if (h.id === action.habitId) {
+                  const nextState = !h.completedToday;
+                  return {
+                    ...h,
+                    completedToday: nextState,
+                    streak: nextState ? (h.streak || 0) + 1 : Math.max(0, (h.streak || 0) - 1),
+                  };
+                }
+                return h;
+              }),
+            };
+          }
+          return g;
+        }),
+      };
+    }
+
+    case 'DELETE_GOAL_INTERNAL_HABIT': {
+      return {
+        ...state,
+        goals: state.goals.map(g => {
+          if (g.id === action.goalId && g.internalHabits) {
+            return {
+              ...g,
+              internalHabits: g.internalHabits.filter(h => h.id !== action.habitId),
+            };
+          }
+          return g;
+        }),
+      };
+    }
+
+    case 'DELETE_GOAL': {
+      return {
+        ...state,
+        goals: action.permanent
+          ? state.goals.filter(g => g.id !== action.id)
+          : state.goals.map(g => (g.id === action.id ? { ...g, isArchived: true } : g)),
+      };
+    }
+
+    case 'RESTORE_GOAL': {
+      return {
+        ...state,
+        goals: state.goals.map(g => (g.id === action.id ? { ...g, isArchived: false } : g)),
+      };
+    }
+
+    case 'REFRESH_HABITS_DAILY_STATUS': {
+      return {
+        ...state,
+        habits: state.habits.map(h => {
+          const stats = calculateHabitStreakAndStats(
+            h.history || {},
+            h.frequency,
+            h.daysOfWeek,
+            h.targetDaysPerWeek,
+            action.dateStr,
+            h.bestStreak || 0
+          );
+          return {
+            ...h,
+            currentQuantityToday: h.history?.[action.dateStr]?.quantity ?? 0,
+            streak: stats.streak,
+            bestStreak: stats.bestStreak,
+          };
+        }),
+      };
+    }
+
+    case 'RESET_DOMAIN': {
+      return {
+        habits: action.habits,
+        goals: action.goals,
+      };
+    }
+
+    default:
+      return state;
+  }
+}
+
+export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const defaultTasks: Task[] = [];
   const defaultHabits: Habit[] = [];
   const defaultGoals: Goal[] = [];
@@ -111,8 +539,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     eveningTime: '21:00',
     reminderSound: true,
     aiEnabled: true,
-    monthlyExpenseBudget: 3500000, // 3.5 mln so'm
+    monthlyExpenseBudget: 3500000,
   };
+
+  const [settings, setSettings] = useState<UserSettings>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_SETTINGS);
+      return saved ? JSON.parse(saved) : defaultSettings;
+    } catch {
+      return defaultSettings;
+    }
+  });
+
+  const [activeTodayStr, setActiveTodayStr] = useState(() =>
+    getDateStringInTimezone(new Date(), defaultSettings.timezone)
+  );
 
   const [tasks, setTasks] = useState<Task[]>(() => {
     try {
@@ -123,23 +564,55 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   });
 
-  const [habits, setHabits] = useState<Habit[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY_HABITS);
-      return saved ? JSON.parse(saved) : defaultHabits;
-    } catch {
-      return defaultHabits;
-    }
-  });
+  const [domainState, domainDispatch] = useReducer(
+    domainReducer,
+    undefined,
+    (): DomainState => {
+      const today = getDateStringInTimezone(new Date(), defaultSettings.timezone);
 
-  const [goals, setGoals] = useState<Goal[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY_GOALS);
-      return saved ? JSON.parse(saved) : defaultGoals;
-    } catch {
-      return defaultGoals;
+      const savedHabits: Habit[] = (() => {
+        try {
+          const saved = localStorage.getItem(STORAGE_KEY_HABITS);
+          if (saved) {
+            const parsed: Habit[] = JSON.parse(saved);
+            return parsed.map(h => {
+              const stats = calculateHabitStreakAndStats(
+                h.history || {},
+                h.frequency,
+                h.daysOfWeek,
+                h.targetDaysPerWeek,
+                today,
+                h.bestStreak || 0
+              );
+              return {
+                ...h,
+                currentQuantityToday: h.history?.[today]?.quantity ?? 0,
+                streak: stats.streak,
+                bestStreak: stats.bestStreak,
+              };
+            });
+          }
+          return defaultHabits;
+        } catch {
+          return defaultHabits;
+        }
+      })();
+
+      const savedGoals: Goal[] = (() => {
+        try {
+          const saved = localStorage.getItem(STORAGE_KEY_GOALS);
+          return saved ? JSON.parse(saved) : defaultGoals;
+        } catch {
+          return defaultGoals;
+        }
+      })();
+
+      return { habits: savedHabits, goals: savedGoals };
     }
-  });
+  );
+
+  const habits = domainState.habits;
+  const goals = domainState.goals;
 
   const [expenses, setExpenses] = useState<Expense[]>(() => {
     try {
@@ -156,15 +629,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return saved ? JSON.parse(saved) : defaultMessages;
     } catch {
       return defaultMessages;
-    }
-  });
-
-  const [settings, setSettings] = useState<UserSettings>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY_SETTINGS);
-      return saved ? JSON.parse(saved) : defaultSettings;
-    } catch {
-      return defaultSettings;
     }
   });
 
@@ -198,6 +662,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     localStorage.setItem(STORAGE_KEY_SETTINGS, JSON.stringify(settings));
   }, [settings]);
 
+  // Adjust active date when day rolls over or window focus / visibility changes
+  useEffect(() => {
+    const checkAndRefreshDate = () => {
+      const currentToday = getDateStringInTimezone(new Date(), settings.timezone);
+      setActiveTodayStr(prev => {
+        if (prev !== currentToday) {
+          domainDispatch({ type: 'REFRESH_HABITS_DAILY_STATUS', dateStr: currentToday });
+          return currentToday;
+        }
+        return prev;
+      });
+    };
+
+    checkAndRefreshDate();
+
+    window.addEventListener('focus', checkAndRefreshDate);
+    document.addEventListener('visibilitychange', checkAndRefreshDate);
+    const intervalId = setInterval(checkAndRefreshDate, 30000);
+
+    return () => {
+      window.removeEventListener('focus', checkAndRefreshDate);
+      document.removeEventListener('visibilitychange', checkAndRefreshDate);
+      clearInterval(intervalId);
+    };
+  }, [settings.timezone]);
+
   // Adjust displayMode on small screens
   useEffect(() => {
     const handleResize = () => {
@@ -213,7 +703,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const addTask = (newTaskData: Omit<Task, 'id'>): Task => {
     const task: Task = {
       ...newTaskData,
-      id: `task-${Date.now()}`,
+      id: generateEntityId('task'),
     };
     setTasks(prev => [task, ...prev]);
     triggerHaptic('light');
@@ -245,15 +735,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setTasks(prev =>
       prev.map(t => {
         if (t.id === id) {
-          if (typeof minutesOrDate === 'number') {
-            const [h, m] = (t.time || '12:00').split(':').map(Number);
-            const dateObj = new Date();
-            dateObj.setHours(h, m + minutesOrDate);
-            const newTime = `${String(dateObj.getHours()).padStart(2, '0')}:${String(dateObj.getMinutes()).padStart(2, '0')}`;
-            return { ...t, time: newTime, status: 'postponed' };
-          } else {
-            return { ...t, date: minutesOrDate, status: 'postponed' };
-          }
+          const updates = calculatePostponedTask(t, minutesOrDate, new Date(), settings.timezone);
+          return { ...t, ...updates };
         }
         return t;
       })
@@ -278,275 +761,132 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const addHabit = (newHabitData: Omit<Habit, 'id' | 'streak' | 'bestStreak' | 'history' | 'currentQuantityToday'>): Habit => {
     const habit: Habit = {
       ...newHabitData,
-      id: `habit-${Date.now()}`,
+      id: generateEntityId('habit'),
       streak: 0,
       bestStreak: 0,
       currentQuantityToday: 0,
       history: {},
     };
-    setHabits(prev => [habit, ...prev]);
+    domainDispatch({ type: 'ADD_HABIT', habit });
     triggerHaptic('light');
     return habit;
   };
 
   const updateHabit = (id: string, updates: Partial<Habit>) => {
-    setHabits(prev => prev.map(h => (h.id === id ? { ...h, ...updates } : h)));
+    domainDispatch({ type: 'UPDATE_HABIT', id, updates, dateStr: activeTodayStr });
     triggerHaptic('light');
   };
 
   const toggleHabitToday = (id: string) => {
-    const today = formatDateYMD(new Date());
-    setHabits(prev =>
-      prev.map(h => {
-        if (h.id === id) {
-          const todayRecord = h.history[today] || { completed: false, quantity: 0 };
-          const willBeCompleted = !todayRecord.completed;
-          const newQuantity = willBeCompleted ? (h.targetQuantity || 1) : 0;
-          const diffQuantity = newQuantity - (todayRecord.quantity || 0);
+    const targetHabit = domainState.habits.find(h => h.id === id);
+    const currentlyDone = targetHabit?.history[activeTodayStr]?.completed;
+    const timestamp = new Date().toISOString();
 
-          triggerHaptic(willBeCompleted ? 'success' : 'selection');
+    domainDispatch({
+      type: 'TOGGLE_HABIT_TODAY',
+      habitId: id,
+      dateStr: activeTodayStr,
+      timestamp,
+    });
 
-          const updatedHistory = {
-            ...h.history,
-            [today]: {
-              completed: willBeCompleted,
-              quantity: newQuantity,
-              timestamp: new Date().toISOString(),
-            },
-          };
-
-          const newStreak = willBeCompleted ? h.streak + 1 : Math.max(0, h.streak - 1);
-          const newBestStreak = Math.max(h.bestStreak, newStreak);
-
-          if (h.linkedGoalId && diffQuantity !== 0) {
-            updateGoalProgress(h.linkedGoalId, diffQuantity);
-          }
-
-          return {
-            ...h,
-            streak: newStreak,
-            bestStreak: newBestStreak,
-            currentQuantityToday: newQuantity,
-            history: updatedHistory,
-          };
-        }
-        return h;
-      })
-    );
+    triggerHaptic(currentlyDone ? 'selection' : 'success');
   };
 
   const logHabitQuantity = (id: string, amount: number) => {
-    const today = formatDateYMD(new Date());
-    setHabits(prev =>
-      prev.map(h => {
-        if (h.id === id) {
-          const todayRecord = h.history[today] || { completed: false, quantity: 0 };
-          const prevQty = todayRecord.quantity || 0;
-          const newQty = Math.max(0, prevQty + amount);
-          const isDone = h.targetQuantity ? newQty >= h.targetQuantity : newQty > 0;
+    const timestamp = new Date().toISOString();
 
-          if (h.linkedGoalId && amount !== 0) {
-            updateGoalProgress(h.linkedGoalId, amount);
-          }
+    domainDispatch({
+      type: 'LOG_HABIT_QUANTITY',
+      habitId: id,
+      amount,
+      dateStr: activeTodayStr,
+      timestamp,
+    });
 
-          const updatedHistory = {
-            ...h.history,
-            [today]: {
-              completed: isDone,
-              quantity: newQty,
-              timestamp: new Date().toISOString(),
-            },
-          };
-
-          return {
-            ...h,
-            currentQuantityToday: newQty,
-            streak: isDone && !todayRecord.completed ? h.streak + 1 : h.streak,
-            history: updatedHistory,
-          };
-        }
-        return h;
-      })
-    );
+    triggerHaptic(amount > 0 ? 'selection' : 'light');
   };
 
   const deleteHabit = (id: string, permanent: boolean = false) => {
-    if (permanent) {
-      setHabits(prev => prev.filter(h => h.id !== id));
-    } else {
-      setHabits(prev => prev.map(h => (h.id === id ? { ...h, isArchived: true } : h)));
-    }
+    domainDispatch({ type: 'DELETE_HABIT', id, permanent });
+    triggerHaptic('warning');
   };
 
   const restoreHabit = (id: string) => {
-    setHabits(prev => prev.map(h => (h.id === id ? { ...h, isArchived: false } : h)));
+    domainDispatch({ type: 'RESTORE_HABIT', id });
+    triggerHaptic('light');
   };
 
   const addGoal = (newGoalData: Omit<Goal, 'id' | 'status'>): Goal => {
     const goal: Goal = {
       ...newGoalData,
-      id: `goal-${Date.now()}`,
+      id: generateEntityId('goal'),
       status: 'active',
     };
-    setGoals(prev => [goal, ...prev]);
+    domainDispatch({ type: 'ADD_GOAL', goal });
+    triggerHaptic('light');
     return goal;
   };
 
   const updateGoal = (id: string, updates: Partial<Goal>) => {
-    setGoals(prev => prev.map(g => (g.id === id ? { ...g, ...updates } : g)));
+    domainDispatch({ type: 'UPDATE_GOAL', id, updates });
     triggerHaptic('light');
   };
 
   const updateGoalProgress = (id: string, deltaAmount: number) => {
-    setGoals(prev =>
-      prev.map(g => {
-        if (g.id === id) {
-          const newVal = Math.max(0, g.currentValue + deltaAmount);
-          const achieved = newVal >= g.targetValue;
-          return {
-            ...g,
-            currentValue: newVal,
-            status: achieved ? 'achieved' : 'active',
-          };
-        }
-        return g;
-      })
-    );
+    domainDispatch({ type: 'UPDATE_GOAL_PROGRESS', id, deltaAmount });
+    triggerHaptic('selection');
   };
 
   const deleteGoal = (id: string, permanent: boolean = false) => {
-    if (permanent) {
-      setGoals(prev => prev.filter(g => g.id !== id));
-    } else {
-      setGoals(prev => prev.map(g => (g.id === id ? { ...g, isArchived: true } : g)));
-    }
+    domainDispatch({ type: 'DELETE_GOAL', id, permanent });
+    triggerHaptic('warning');
   };
 
   const restoreGoal = (id: string) => {
-    setGoals(prev => prev.map(g => (g.id === id ? { ...g, isArchived: false } : g)));
+    domainDispatch({ type: 'RESTORE_GOAL', id });
+    triggerHaptic('light');
   };
 
   const logGoalProgress = (goalId: string, amount: number, note?: string) => {
-    const today = formatDateYMD(new Date());
     const timeStr = getTimeString();
-    setGoals(prev =>
-      prev.map(g => {
-        if (g.id === goalId) {
-          const isDecrease = g.goalType === 'decrease';
-          const newVal = isDecrease
-            ? Math.max(0, g.currentValue - amount)
-            : Math.max(0, g.currentValue + amount);
-
-          const achieved = isDecrease ? newVal <= g.targetValue : newVal >= g.targetValue;
-          const remaining = isDecrease
-            ? Math.max(0, newVal - g.targetValue)
-            : Math.max(0, g.targetValue - newVal);
-
-          const newLog: GoalProgressLog = {
-            id: `log-${Date.now()}`,
-            date: today,
-            time: timeStr,
-            amount,
-            note: note || undefined,
-            resultingCurrent: newVal,
-            resultingRemaining: remaining,
-          };
-
-          return {
-            ...g,
-            currentValue: newVal,
-            status: achieved ? 'achieved' : 'active',
-            progressLogs: [newLog, ...(g.progressLogs || [])],
-          };
-        }
-        return g;
-      })
-    );
+    const logId = generateEntityId('log');
+    domainDispatch({
+      type: 'LOG_GOAL_PROGRESS',
+      goalId,
+      amount,
+      date: activeTodayStr,
+      time: timeStr,
+      logId,
+      note,
+    });
+    triggerHaptic('selection');
   };
 
   const deleteGoalProgressLog = (goalId: string, logId: string) => {
-    setGoals(prev =>
-      prev.map(g => {
-        if (g.id === goalId && g.progressLogs) {
-          const targetLog = g.progressLogs.find(l => l.id === logId);
-          if (!targetLog) return g;
-
-          const isDecrease = g.goalType === 'decrease';
-          const revertedVal = isDecrease
-            ? g.currentValue + targetLog.amount
-            : Math.max(0, g.currentValue - targetLog.amount);
-
-          const achieved = isDecrease ? revertedVal <= g.targetValue : revertedVal >= g.targetValue;
-
-          return {
-            ...g,
-            currentValue: revertedVal,
-            status: achieved ? 'achieved' : 'active',
-            progressLogs: g.progressLogs.filter(l => l.id !== logId),
-          };
-        }
-        return g;
-      })
-    );
+    domainDispatch({ type: 'DELETE_GOAL_PROGRESS_LOG', goalId, logId });
+    triggerHaptic('light');
   };
 
   const addGoalInternalHabit = (goalId: string, title: string, targetFrequency: string) => {
     const newHabit: GoalInternalHabit = {
-      id: `ghabit-${Date.now()}`,
+      id: generateEntityId('ghabit'),
       title,
       targetFrequency,
       completedToday: false,
       streak: 0,
     };
-    setGoals(prev =>
-      prev.map(g => {
-        if (g.id === goalId) {
-          return {
-            ...g,
-            internalHabits: [...(g.internalHabits || []), newHabit],
-          };
-        }
-        return g;
-      })
-    );
+    domainDispatch({ type: 'ADD_GOAL_INTERNAL_HABIT', goalId, internalHabit: newHabit });
+    triggerHaptic('light');
   };
 
   const toggleGoalInternalHabit = (goalId: string, habitId: string) => {
-    setGoals(prev =>
-      prev.map(g => {
-        if (g.id === goalId && g.internalHabits) {
-          return {
-            ...g,
-            internalHabits: g.internalHabits.map(h => {
-              if (h.id === habitId) {
-                const nextState = !h.completedToday;
-                return {
-                  ...h,
-                  completedToday: nextState,
-                  streak: nextState ? (h.streak || 0) + 1 : Math.max(0, (h.streak || 0) - 1),
-                };
-              }
-              return h;
-            }),
-          };
-        }
-        return g;
-      })
-    );
+    domainDispatch({ type: 'TOGGLE_GOAL_INTERNAL_HABIT', goalId, habitId });
+    triggerHaptic('selection');
   };
 
   const deleteGoalInternalHabit = (goalId: string, habitId: string) => {
-    setGoals(prev =>
-      prev.map(g => {
-        if (g.id === goalId && g.internalHabits) {
-          return {
-            ...g,
-            internalHabits: g.internalHabits.filter(h => h.id !== habitId),
-          };
-        }
-        return g;
-      })
-    );
+    domainDispatch({ type: 'DELETE_GOAL_INTERNAL_HABIT', goalId, habitId });
+    triggerHaptic('light');
   };
 
   const exportAllDataAsJson = () => {
@@ -573,7 +913,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const addExpense = (newExpenseData: Omit<Expense, 'id'>): Expense => {
     const expense: Expense = {
       ...newExpenseData,
-      id: `exp-${Date.now()}`,
+      id: generateEntityId('exp'),
     };
     setExpenses(prev => [expense, ...prev]);
     triggerHaptic('light');
@@ -598,14 +938,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setTasks(data.tasks);
         loadedCount += data.tasks.length;
       }
+      const importedHabits = Array.isArray(data.habits) ? data.habits : habits;
+      const importedGoals = Array.isArray(data.goals) ? data.goals : goals;
       if (Array.isArray(data.habits)) {
-        setHabits(data.habits);
         loadedCount += data.habits.length;
       }
       if (Array.isArray(data.goals)) {
-        setGoals(data.goals);
         loadedCount += data.goals.length;
       }
+      domainDispatch({
+        type: 'RESET_DOMAIN',
+        habits: importedHabits,
+        goals: importedGoals,
+      });
+
       if (Array.isArray(data.expenses)) {
         setExpenses(data.expenses);
         loadedCount += data.expenses.length;
@@ -628,8 +974,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const getTimeString = () => {
-    const now = new Date();
-    return `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+    const iana = getIanaTimezone(settings.timezone);
+    try {
+      return new Intl.DateTimeFormat('en-GB', {
+        timeZone: iana,
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+      }).format(new Date());
+    } catch {
+      const now = new Date();
+      return `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+    }
   };
 
   // Bot Chat Flow and Uzbek NLP handling
@@ -639,7 +995,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const timeStr = getTimeString();
     const userMsg: ChatMessage = {
-      id: `msg-user-${Date.now()}`,
+      id: generateEntityId('msg-user'),
       sender: 'user',
       text: trimmed,
       timestamp: timeStr,
@@ -662,7 +1018,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       // Handle Ambiguous input
       if (parsed.category === 'noaniq') {
         const botReply: ChatMessage = {
-          id: `msg-bot-${Date.now()}`,
+          id: generateEntityId('msg-bot'),
           sender: 'bot',
           text: `🤔 Siz kiritgan yozuv: **"${parsed.title}"**\n\nIltimos, ushbu yozuv qaysi toifaga mansubligini tanlang:`,
           timestamp: getTimeString(),
@@ -718,18 +1074,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const amountDisplay = parsed.amount ? formatSom(parsed.amount) : '0 so\'m';
         const categoryLabel = parsed.expenseCategory ? parsed.expenseCategory.replace('_', ' ') : 'shaxsiy';
 
-        responseText = `💸 **Yangi Xarajat aniqlandi:**\n\n📌 **Nomi:** ${parsed.title}\n💰 **Summa:** ${amountDisplay}\n🏷 **Toifa:** ${categoryLabel}\n📅 **Sana:** Bugun (${parsed.date || todayStr})`;
+        responseText = `💸 **Yangi Xarajat aniqlandi:**\n\n📌 **Nomi:** ${parsed.title}\n💰 **Summa:** ${amountDisplay}\n🏷 **Toifa:** ${categoryLabel}\n📅 **Sana:** Bugun (${parsed.date || activeTodayStr})`;
 
         actions.push(
           {
-            id: `confirm-exp-${Date.now()}`,
+            id: generateEntityId('confirm-exp'),
             label: '✅ Xarajatni Saqlash',
             action: 'confirm_create',
             payload: parsed,
             variant: 'primary',
           },
           {
-            id: `cancel-${Date.now()}`,
+            id: generateEntityId('cancel'),
             label: '❌ Bekor qilish',
             action: 'cancel_prompt',
             variant: 'danger',
@@ -745,21 +1101,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
         actions.push(
           {
-            id: `mark-intake-${Date.now()}`,
+            id: generateEntityId('mark-intake'),
             label: '✅ Bugun qabul qilindi',
             action: 'confirm_create',
             payload: { ...parsed, markDoneToday: true },
             variant: 'primary',
           },
           {
-            id: `add-routine-${Date.now()}`,
+            id: generateEntityId('add-routine'),
             label: '🔁 Doimiy odatga qo\'shish',
             action: 'confirm_create',
             payload: { ...parsed, markDoneToday: false },
             variant: 'secondary',
           },
           {
-            id: `cancel-${Date.now()}`,
+            id: generateEntityId('cancel'),
             label: '❌ Bekor qilish',
             action: 'cancel_prompt',
             variant: 'danger',
@@ -768,26 +1124,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
       // TASKS & MEETINGS
       else if (parsed.category === 'vazifa' || parsed.category === 'uchrashuv') {
-        const dateLabel = formatUzbekDateLabel(parsed.date || todayStr, parsed.time);
+        const dateLabel = formatUzbekDateLabel(parsed.date || activeTodayStr, parsed.time);
         responseText = `✅ **${parsed.category === 'uchrashuv' ? 'Uchrashuv' : 'Vazifa'} aniqlandi:**\n\n📌 **Nomi:** ${parsed.title}\n📅 **Sana:** ${dateLabel}\n⏰ **Vaqt:** ${parsed.time || 'Belgilanmagan (kun davomida)'}\n🌍 **Vaqt zonasi:** ${settings.timezone}`;
 
         actions.push(
           {
-            id: `confirm-${Date.now()}`,
+            id: generateEntityId('confirm'),
             label: '✅ Tasdiqlash va Saqlash',
             action: 'confirm_create',
             payload: parsed,
             variant: 'primary',
           },
           {
-            id: `edit-${Date.now()}`,
+            id: generateEntityId('edit'),
             label: '✏️ Vaqtni o\'zgartirish',
             action: 'edit_time',
             payload: parsed,
             variant: 'secondary',
           },
           {
-            id: `cancel-${Date.now()}`,
+            id: generateEntityId('cancel'),
             label: '❌ Bekor qilish',
             action: 'cancel_prompt',
             variant: 'danger',
@@ -802,14 +1158,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
         actions.push(
           {
-            id: `confirm-${Date.now()}`,
+            id: generateEntityId('confirm'),
             label: '✅ Odatni Saqlash',
             action: 'confirm_create',
             payload: parsed,
             variant: 'primary',
           },
           {
-            id: `cancel-${Date.now()}`,
+            id: generateEntityId('cancel'),
             label: '❌ Bekor qilish',
             action: 'cancel_prompt',
             variant: 'danger',
@@ -826,14 +1182,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
         actions.push(
           {
-            id: `confirm-${Date.now()}`,
+            id: generateEntityId('confirm'),
             label: '✅ Maqsadni Saqlash',
             action: 'confirm_create',
             payload: parsed,
             variant: 'primary',
           },
           {
-            id: `cancel-${Date.now()}`,
+            id: generateEntityId('cancel'),
             label: '❌ Bekor qilish',
             action: 'cancel_prompt',
             variant: 'danger',
@@ -842,7 +1198,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
 
       const botReply: ChatMessage = {
-        id: `msg-bot-${Date.now()}`,
+        id: generateEntityId('msg-bot'),
         sender: 'bot',
         text: responseText,
         timestamp: getTimeString(),
@@ -855,7 +1211,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setMessages(prev => [
         ...prev,
         {
-          id: `msg-err-${Date.now()}`,
+          id: generateEntityId('msg-err'),
           sender: 'bot',
           text: 'Kechirasiz, xabaringizni tahlil qilishda xatolik yuz berdi. Iltimos qaytadan urinib ko\'ring.',
           timestamp: getTimeString(),
@@ -873,7 +1229,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setMessages(prev => [
         ...prev,
         {
-          id: `cmd-start-${Date.now()}`,
+          id: generateEntityId('cmd-start'),
           sender: 'bot',
           text: `Salom, ${settings.name}! 🚀\n\nMen sizning shaxsiy Telegram yordamchingizman.\n\nQuyidagi imkoniyatlardan foydalanishingiz mumkin:\n• **Xarajatlar:** \`harajat: 45000 tushlik\` yoki \`sarf: 120000 taksi\`\n• **Salomatlik & Qabullar:** \`5g kreatin\` yoki \`l-arginin\` yoki \`ertalab asalli suv\`\n• **Vazifalar:** \`vazifa: ertaga soat 15:30 hisobot yuborish\`\n• **Odatlar & Maqsadlar:** \`odat: har kuni 20 sahifa kitob\`\n• \`/harajat\` - Bugungi va oylik xarajatlar sarhisobi\n• \`/salomatlik\` - Kunlik qabullar holati\n• \`/bugun\` - Bugungi barcha rejalar`,
           timestamp: timeStr,
@@ -888,9 +1244,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         },
       ]);
     } else if (cleanCmd === '/harajat' || cleanCmd === '/moliya') {
-      const todayExpenses = expenses.filter(e => e.date === todayStr);
+      const todayExpenses = expenses.filter(e => e.date === activeTodayStr);
       const todayTotal = todayExpenses.reduce((sum, e) => sum + e.amount, 0);
-      const monthPrefix = todayStr.slice(0, 7);
+      const monthPrefix = activeTodayStr.slice(0, 7);
       const monthTotal = expenses.filter(e => e.date.startsWith(monthPrefix)).reduce((sum, e) => sum + e.amount, 0);
 
       let text = `💰 **Moliyaviy Sarhisob:**\n\n`;
@@ -909,7 +1265,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setMessages(prev => [
         ...prev,
         {
-          id: `cmd-exp-${Date.now()}`,
+          id: generateEntityId('cmd-exp'),
           sender: 'bot',
           text,
           timestamp: timeStr,
@@ -931,7 +1287,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         text += `Qabullar mavjud emas. Masalan, "5g kreatin", "l-arginin" yoki "ertalab asalli suv" deb yozishingiz mumkin.`;
       } else {
         supplementHabits.forEach(sh => {
-          const isDone = sh.history[todayStr]?.completed;
+          const isDone = sh.history[activeTodayStr]?.completed;
           const statusIcon = isDone ? '✅' : '⏳';
           text += `${statusIcon} **${sh.title}** (${sh.dosage || ''})\n   ⏰ ${sh.timeSlot || 'Kunlik'}\n`;
         });
@@ -940,7 +1296,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setMessages(prev => [
         ...prev,
         {
-          id: `cmd-salom-${Date.now()}`,
+          id: generateEntityId('cmd-salom'),
           sender: 'bot',
           text,
           timestamp: timeStr,
@@ -955,7 +1311,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         },
       ]);
     } else if (cleanCmd === '/bugun') {
-      const today = formatDateYMD(new Date());
+      const today = activeTodayStr;
       const todaysTasks = tasks.filter(t => t.date === today && t.status !== 'cancelled');
       const todaysHabits = habits;
       const todayExpenses = expenses.filter(e => e.date === today);
@@ -988,7 +1344,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setMessages(prev => [
         ...prev,
         {
-          id: `cmd-bugun-${Date.now()}`,
+          id: generateEntityId('cmd-bugun'),
           sender: 'bot',
           text,
           timestamp: timeStr,
@@ -1011,7 +1367,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setMessages(prev => [
           ...prev,
           {
-            id: `cmd-hisobot-${Date.now()}`,
+            id: generateEntityId('cmd-hisobot'),
             sender: 'bot',
             text: `📊 **Haftalik Tahlil va Maslahatlar:**\n\n${summary}`,
             timestamp: getTimeString(),
@@ -1030,7 +1386,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setMessages(prev => [
         ...prev,
         {
-          id: `cmd-help-${Date.now()}`,
+          id: generateEntityId('cmd-help'),
           sender: 'bot',
           text: `ℹ️ **Kunlik Yordamchi buyruqlari:**\n\n• \`/bugun\` - Bugungi ishlar ro'yxati\n• \`/harajat\` - Xarajatlar tahlili\n• \`/salomatlik\` - Kreatin, l-arginin, asalli suv qabullari\n• \`/reja\` - Ertalabki rejalashtirish\n• \`/sarhisob\` - Kechki hisobot\n\n**Misollar:**\n• \`harajat: 45000 tushlik\`\n• \`5g kreatin\`\n• \`l-arginin ichdim\`\n• \`vazifa: ertaga soat 15:30 hisobot yuborish\``,
           timestamp: timeStr,
@@ -1060,7 +1416,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           amount: payload.amount || 0,
           currency: payload.currency || 'UZS',
           category: payload.expenseCategory || 'shaxsiy',
-          date: payload.date || todayStr,
+          date: payload.date || activeTodayStr,
           time: payload.time || timeStr,
           source: 'bot',
         });
@@ -1070,7 +1426,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setMessages(prev => [
           ...prev,
           {
-            id: `conf-${Date.now()}`,
+            id: generateEntityId('conf'),
             sender: 'bot',
             text: `🎉 Saqlandi! **${formattedMoneyStr}** - "${createdExp.title}" xarajatlar ro'yxatiga qo'shildi!`,
             timestamp: timeStr,
@@ -1096,13 +1452,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
         if (existing) {
           // Toggle or mark completed
-          if (!existing.history[todayStr]?.completed) {
+          if (!existing.history[activeTodayStr]?.completed) {
             toggleHabitToday(existing.id);
           }
           setMessages(prev => [
             ...prev,
             {
-              id: `conf-${Date.now()}`,
+              id: generateEntityId('conf'),
               sender: 'bot',
               text: `✅ Qabul qilindi! **"${existing.title}"** bugungi ro'yxatda bajarilgan deb belgilandi! (🔥 ${existing.streak + 1} kun uzluksiz)`,
               timestamp: timeStr,
@@ -1138,7 +1494,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           setMessages(prev => [
             ...prev,
             {
-              id: `conf-${Date.now()}`,
+              id: generateEntityId('conf'),
               sender: 'bot',
               text: `🎉 Yangi qabul saqlandi: **"${created.title}"** (${payload.dosage || ''})!\nHar kuni belgilashingiz mumkin.`,
               timestamp: timeStr,
@@ -1159,7 +1515,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const createdTask = addTask({
           title: payload.title,
           category: payload.category,
-          date: payload.date || todayStr,
+          date: payload.date || activeTodayStr,
           time: payload.time || undefined,
           status: 'pending',
           priority: 'medium',
@@ -1169,7 +1525,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setMessages(prev => [
           ...prev,
           {
-            id: `conf-${Date.now()}`,
+            id: generateEntityId('conf'),
             sender: 'bot',
             text: `🎉 Saqlandi! **"${createdTask.title}"** Mini App vazifalar ro'yxatiga qo'shildi.\n📅 Sana: ${formatUzbekDateLabel(createdTask.date, createdTask.time)}`,
             timestamp: timeStr,
@@ -1205,7 +1561,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setMessages(prev => [
           ...prev,
           {
-            id: `conf-${Date.now()}`,
+            id: generateEntityId('conf'),
             sender: 'bot',
             text: `🎉 Yangi odat saqlandi: **"${createdHabit.title}"**!\nHar kuni belgilashni unutmang.`,
             timestamp: timeStr,
@@ -1223,7 +1579,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const createdGoal = addGoal({
           title: payload.title,
           category: 'maqsad',
-          deadline: payload.date || `${todayStr.slice(0, 7)}-30`,
+          deadline: payload.date || `${activeTodayStr.slice(0, 7)}-30`,
           targetValue: payload.quantity || 100,
           currentValue: 0,
           unit: payload.unit || 'birlik',
@@ -1233,7 +1589,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setMessages(prev => [
           ...prev,
           {
-            id: `conf-${Date.now()}`,
+            id: generateEntityId('conf'),
             sender: 'bot',
             text: `🎯 Yangi maqsad belgilandi: **"${createdGoal.title}"**!\nKichik qadamlar bilan katta natijaga erishamiz.`,
             timestamp: timeStr,
@@ -1259,14 +1615,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           title: p.title,
           amount: p.amount || 20000,
           category: 'shaxsiy',
-          date: todayStr,
+          date: activeTodayStr,
           time: timeStr,
           source: 'bot',
         });
         setMessages(prev => [
           ...prev,
           {
-            id: `res-${Date.now()}`,
+            id: generateEntityId('res'),
             sender: 'bot',
             text: `💸 Xarajat saqlandi: "${p.title}" (${formatSom(p.amount || 20000)})`,
             timestamp: timeStr,
@@ -1289,7 +1645,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setMessages(prev => [
           ...prev,
           {
-            id: `res-${Date.now()}`,
+            id: generateEntityId('res'),
             sender: 'bot',
             text: `💊 Salomatlik qabuli saqlandi: "${p.title}"`,
             timestamp: timeStr,
@@ -1300,7 +1656,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         addTask({
           title: p.title,
           category: 'vazifa',
-          date: p.date || todayStr,
+          date: p.date || activeTodayStr,
           time: p.time || undefined,
           status: 'pending',
           priority: 'medium',
@@ -1309,7 +1665,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setMessages(prev => [
           ...prev,
           {
-            id: `res-${Date.now()}`,
+            id: generateEntityId('res'),
             sender: 'bot',
             text: `✅ Vazifa sifatida saqlandi: "${p.title}"`,
             timestamp: timeStr,
@@ -1330,7 +1686,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setMessages(prev => [
           ...prev,
           {
-            id: `res-${Date.now()}`,
+            id: generateEntityId('res'),
             sender: 'bot',
             text: `🔁 Odat sifatida saqlandi: "${p.title}"`,
             timestamp: timeStr,
@@ -1345,7 +1701,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setMessages(prev => [
         ...prev,
         {
-          id: `canc-${Date.now()}`,
+          id: generateEntityId('canc'),
           sender: 'bot',
           text: 'Bekor qilindi. Boshqa biror ish kiritishingiz mumkin.',
           timestamp: timeStr,
@@ -1367,7 +1723,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setMessages(prev => [
         ...prev,
         {
-          id: `edit-${Date.now()}`,
+          id: generateEntityId('edit'),
           sender: 'bot',
           text: `Vaqtni o'zgartirish uchun yangi vaqtni yozing (masalan: "ertaga soat 17:00 da ${action.payload.title}")`,
           timestamp: timeStr,
@@ -1381,7 +1737,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const text = `🔔 **ESLATMA VAQTI KELDI!**\n\n📌 **${title}**\n⏰ Belgilangan vaqti: Hozir\n\nVazifani bajargan bo'lsangiz, tasdiqlang:`;
 
     const reminderMsg: ChatMessage = {
-      id: `remind-${Date.now()}`,
+      id: generateEntityId('remind'),
       sender: 'bot',
       text,
       timestamp: getTimeString(),
@@ -1415,7 +1771,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const runMorningKickoff = () => {
-    const today = formatDateYMD(new Date());
+    const today = activeTodayStr;
     const countTasks = tasks.filter(t => t.date === today && t.status === 'pending').length;
     const countHabits = habits.length;
     const morningSupplements = habits.filter(h => h.habitType === 'supplement_health');
@@ -1434,7 +1790,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setMessages(prev => [
       ...prev,
       {
-        id: `morning-${Date.now()}`,
+        id: generateEntityId('morning'),
         sender: 'bot',
         text: msg,
         timestamp: getTimeString(),
@@ -1451,7 +1807,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const runEveningReflection = () => {
-    const today = formatDateYMD(new Date());
+    const today = activeTodayStr;
     const doneTasks = tasks.filter(t => t.date === today && t.status === 'completed').length;
     const pendingTasks = tasks.filter(t => t.date === today && t.status !== 'completed').length;
     const completedHabits = habits.filter(h => h.history[today]?.completed).length;
@@ -1462,7 +1818,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setMessages(prev => [
       ...prev,
       {
-        id: `evening-${Date.now()}`,
+        id: generateEntityId('evening'),
         sender: 'bot',
         text: msg,
         timestamp: getTimeString(),
@@ -1510,8 +1866,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const resetToDemoData = () => {
     setTasks(defaultTasks);
-    setHabits(defaultHabits);
-    setGoals(defaultGoals);
+    domainDispatch({ type: 'RESET_DOMAIN', habits: defaultHabits, goals: defaultGoals });
     setExpenses(defaultExpenses);
     setMessages(defaultMessages);
     setSettings(defaultSettings);
@@ -1519,8 +1874,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const clearAllData = () => {
     setTasks([]);
-    setHabits([]);
-    setGoals([]);
+    domainDispatch({ type: 'RESET_DOMAIN', habits: [], goals: [] });
     setExpenses([]);
     setMessages([]);
     try {
