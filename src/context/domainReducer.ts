@@ -3,7 +3,7 @@ import {
   applyHabitQuantityChange,
   applyHabitToggle,
   calculateHabitStreakAndStats,
-  calculateInternalHabitStreak,
+  calculateInternalHabitStats,
 } from '../utils/domainCalculations';
 
 export interface DomainState {
@@ -150,13 +150,18 @@ export function normalizeGoalInternalHabitsForDate(goal: Goal, dateStr: string):
     internalHabits: goal.internalHabits.map(ih => {
       const history = ih.history || {};
       const completedToday = !!history[dateStr]?.completed;
-      const stats = calculateInternalHabitStreak(history, dateStr, ih.bestStreak || 0);
+      const stats = calculateInternalHabitStats(
+        history,
+        dateStr,
+        ih.streak ?? 0,
+        ih.bestStreak ?? 0
+      );
       return {
         ...ih,
         completedToday,
         history,
-        streak: stats.streak,
-        bestStreak: stats.bestStreak,
+        streak: ih.streak ?? 0,
+        bestStreak: ih.bestStreak ?? 0,
         totalCompletions: stats.totalCompletions,
       };
     }),
@@ -396,17 +401,18 @@ export function domainReducer(state: DomainState, action: DomainAction): DomainS
                       timestamp: action.timestamp,
                     },
                   };
-                  const stats = calculateInternalHabitStreak(
+                  const stats = calculateInternalHabitStats(
                     updatedHistory,
                     action.dateStr,
-                    h.bestStreak || 0
+                    h.streak ?? 0,
+                    h.bestStreak ?? 0
                   );
                   return {
                     ...h,
                     completedToday: willBeDone,
                     history: updatedHistory,
-                    streak: stats.streak,
-                    bestStreak: stats.bestStreak,
+                    streak: h.streak ?? 0,
+                    bestStreak: h.bestStreak ?? 0,
                     totalCompletions: stats.totalCompletions,
                   };
                 }

@@ -10,6 +10,7 @@ import {
   getDateStringInTimezone,
   addDaysToYMD,
   validateDaysOfWeek,
+  isValidYMD,
 } from '../utils/domainCalculations';
 import { Habit, Goal, Task, GoalInternalHabit } from '../types';
 import {
@@ -379,31 +380,43 @@ console.log('=== KUNLIK YORDAMCHI DOMEN TESTLARI ===\n');
   );
 }
 
-// Test J: Maqsad ichidagi ichki odatlar (tarixdan 'Jami X kun bajarilgan' ko'rsatkichi)
+// Test J: Maqsad ichidagi ichki odatlar (tarixdan 'Jami X kun bajarilgan' ko'rsatkichi va streak'ni yo'qotmaslik)
 {
   const internalHabit: GoalInternalHabit = {
     id: 'ghabit-1',
     title: 'Ertalabki yugurish',
     targetFrequency: 'Har kuni 20 daqiqa',
     completedToday: false,
-    streak: 0,
-    bestStreak: 0,
+    streak: 4,
+    bestStreak: 7,
     history: {
       '2026-10-27': { completed: true },
       '2026-10-28': { completed: true },
     },
   };
 
-  // 1. Tarixdagi bajarilgan kunlar soni: 2 kun
-  const statsPre = calculateInternalHabitStats(internalHabit.history, '2026-10-29', 0);
+  // 1. Tarixdagi bajarilgan kunlar soni alohida hisoblanadi va streak/bestStreak ni ezib tashlamaydi
+  const statsPre = calculateInternalHabitStats(
+    internalHabit.history,
+    '2026-10-29',
+    internalHabit.streak || 0,
+    internalHabit.bestStreak || 0
+  );
   assert(statsPre.totalCompletions === 2, 'j1) Ichki odat tarixdan jami 2 kun bajarilgan deb hisoblaydi', `Jami: ${statsPre.totalCompletions}`);
+  assert(statsPre.streak === 4, 'j1) Ichki odatning mavjud streak (4) qiymati yo\'qolmasdan saqlanadi');
+  assert(statsPre.bestStreak === 7, 'j1) Ichki odatning mavjud bestStreak (7) qiymati yo\'qolmasdan saqlanadi');
 
   // 2. Bugungi kun (2026-10-29) bajarilganda jami 3 kun bo'ladi
   const historyWithToday = {
     ...internalHabit.history,
     '2026-10-29': { completed: true, timestamp: '2026-10-29T08:00:00Z' },
   };
-  const statsPost = calculateInternalHabitStats(historyWithToday, '2026-10-29', statsPre.bestStreak);
+  const statsPost = calculateInternalHabitStats(
+    historyWithToday,
+    '2026-10-29',
+    internalHabit.streak || 0,
+    internalHabit.bestStreak || 0
+  );
   assert(statsPost.totalCompletions === 3, 'j2) Ichki odat bugun bajarilganda jami 3 kun bo\'ladi', `Jami: ${statsPost.totalCompletions}`);
 
   // 3. Eski dateless legacy ichki odat migratsiyasi: bugunga uydirma completion YOZILMASIN
@@ -435,13 +448,17 @@ console.log('=== KUNLIK YORDAMCHI DOMEN TESTLARI ===\n');
     `completedToday: ${normalizedHabit.completedToday}`
   );
   assert(
+    normalizedHabit.streak === 5,
+    'j3) Eski streak (5) o\'chib ketmasdan o\'z holida saqlanadi'
+  );
+  assert(
     normalizedHabit.totalCompletions === 0,
     'j3) Tarixsiz eski odatda totalCompletions 0 bo\'ladi',
     `totalCompletions: ${normalizedHabit.totalCompletions}`
   );
 }
 
-// Test K: calculatePostponedTask da 00:00 nol qiymat va xavfsiz kechiktirish
+// Test K: calculatePostponedTask da 00:00 nol qiymat, kalendar sanasi tekshiruvi va xavfsiz kechiktirish
 {
   // 1. Task vaqti aynan 00:00 bo'lgan holat (00 falsy deb 9:00 ga aylanib ketmasligi kerak!)
   const midnightTask: Task = {
@@ -475,20 +492,42 @@ console.log('=== KUNLIK YORDAMCHI DOMEN TESTLARI ===\n');
     `Natija: ${postponedInTashkent?.date} ${postponedInTashkent?.time}`
   );
 
-  // 3. NaN yoki Infinity kechiktirish qiymati rad etiladi (null qaytadi)
-  const postponedNan = calculatePostponedTask(midnightTask, NaN, nowUtc, 'Asia/Tashkent');
-  assert(postponedNan === null, 'k3) NaN kechiktirish null qaytaradi');
-  const postponedInf = calculatePostponedTask(midnightTask, Infinity, nowUtc, 'Asia/Tashkent');
-  assert(postponedInf === null, 'k3) Infinity kechiktirish null qaytaradi');
+  // 3. String sanani qat'iy kalendar sanasi sifatida tekshirish
+  assert(calculatePostponedTask(midnightTask, 'abc', nowUtc) === null, 'k3) "abc" noto\'g\'ri format rad etiladi');
+  assert(calculatePostponedTask(midnightTask, '2026-02-31', nowUtc) === null, 'k3) "2026-02-31" mavjud bo\'lmagan sana rad etiladi');
+  assert(calculatePostponedTask(midnightTask, '2026-13-01', nowUtc) === null, 'k3) "2026-13-01" 13-oy rad etiladi');
 
-  // Chaqiruvchi (AppContext) xato holatida vazifaning barcha maydonlarini o'zgartirmay saqlaydi
+  // Kabisa yili tekshiruvi:
+  const leapValid = calculatePostponedTask(midnightTask, '2024-02-29', nowUtc);
+  assert(leapValid !== null && leapValid.date === '2024-02-29', 'k3) 2024 kabisa yilida 29-fevral qabul qilinadi');
+  const nonLeapInvalid = calculatePostponedTask(midnightTask, '2026-02-29', nowUtc);
+  assert(nonLeapInvalid === null, 'k3) 2026 oddiy yilda 29-fevral rad etiladi');
+
+  // Yil va oy almashishi:
+  const endYearValid = calculatePostponedTask(midnightTask, '2026-12-31', nowUtc);
+  assert(endYearValid !== null && endYearValid.date === '2026-12-31', 'k3) Yil oxiri 2026-12-31 qabul qilinadi');
+  const newYearValid = calculatePostponedTask(midnightTask, '2027-01-01', nowUtc);
+  assert(newYearValid !== null && newYearValid.date === '2027-01-01', 'k3) Yangi yil 2027-01-01 qabul qilinadi');
+
+  // 4. NaN yoki Infinity kechiktirish qiymati rad etiladi (null qaytadi)
+  assert(calculatePostponedTask(midnightTask, NaN, nowUtc, 'Asia/Tashkent') === null, 'k4) NaN kechiktirish null qaytaradi');
+  assert(calculatePostponedTask(midnightTask, Infinity, nowUtc, 'Asia/Tashkent') === null, 'k4) Infinity kechiktirish null qaytaradi');
+
+  // Rad etilgan amal vazifaning barcha maydonlarini o'zgartirmay saqlaydi
   const taskBefore: Task = { ...midnightTask };
   const updates = calculatePostponedTask(taskBefore, NaN, nowUtc, 'Asia/Tashkent');
   const taskAfter: Task = updates ? { ...taskBefore, ...updates } : taskBefore;
-  assert(taskAfter.date === taskBefore.date, 'k4) Noto\'g\'ri kechiktirishda sana o\'zgarmaydi');
-  assert(taskAfter.time === taskBefore.time, 'k4) Noto\'g\'ri kechiktirishda vaqt o\'zgarmaydi');
-  assert(taskAfter.status === taskBefore.status, 'k4) Noto\'g\'ri kechiktirishda status o\'zgarmaydi');
-  assert(taskAfter.postponedUntil === taskBefore.postponedUntil, 'k4) Noto\'g\'ri kechiktirishda postponedUntil o\'zgarmaydi');
+  assert(taskAfter.date === taskBefore.date, 'k5) Noto\'g\'ri raqamli kechiktirishda sana o\'zgarmaydi');
+  assert(taskAfter.time === taskBefore.time, 'k5) Noto\'g\'ri raqamli kechiktirishda vaqt o\'zgarmaydi');
+  assert(taskAfter.status === taskBefore.status, 'k5) Noto\'g\'ri raqamli kechiktirishda status o\'zgarmaydi');
+  assert(taskAfter.postponedUntil === taskBefore.postponedUntil, 'k5) Noto\'g\'ri raqamli kechiktirishda postponedUntil o\'zgarmaydi');
+
+  const updatesStr = calculatePostponedTask(taskBefore, '2026-02-31', nowUtc, 'Asia/Tashkent');
+  const taskAfterStr: Task = updatesStr ? { ...taskBefore, ...updatesStr } : taskBefore;
+  assert(taskAfterStr.date === taskBefore.date, 'k5) Noto\'g\'ri sanali kechiktirishda sana o\'zgarmaydi');
+  assert(taskAfterStr.time === taskBefore.time, 'k5) Noto\'g\'ri sanali kechiktirishda vaqt o\'zgarmaydi');
+  assert(taskAfterStr.status === taskBefore.status, 'k5) Noto\'g\'ri sanali kechiktirishda status o\'zgarmaydi');
+  assert(taskAfterStr.postponedUntil === taskBefore.postponedUntil, 'k5) Noto\'g\'ri sanali kechiktirishda postponedUntil o\'zgarmaydi');
 }
 
 // Test L: bestStreak ni butun tarixdan izlash va kelajak sanalar himoyasi

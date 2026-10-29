@@ -83,6 +83,28 @@ export function addDaysToYMD(ymd: string, days: number): string {
 }
 
 /**
+ * Validates whether a string is a strict YYYY-MM-DD format and a real calendar date.
+ * Rejects "abc", "2026-02-31", "2026-13-01", etc. Handles leap years correctly.
+ */
+export function isValidYMD(dateStr: string): boolean {
+  if (typeof dateStr !== 'string') return false;
+  const match = dateStr.trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return false;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (month < 1 || month > 12) return false;
+  if (day < 1 || day > 31) return false;
+
+  const dt = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
+  return (
+    dt.getUTCFullYear() === year &&
+    dt.getUTCMonth() === month - 1 &&
+    dt.getUTCDate() === day
+  );
+}
+
+/**
  * Generates an entity ID using crypto.randomUUID() when available, with a fallback
  */
 export function generateEntityId(prefix: string): string {
@@ -384,12 +406,13 @@ function calculateWeeklyTargetStats(
 /**
  * Calculates metrics for goal internal habits.
  * Since targetFrequency is free-text and not a structured schedule,
- * we do not guess an unreliable schedule-dependent streak;
- * instead we calculate accurate total completed days ("Jami X kun bajarilgan").
+ * we do not guess an unreliable schedule-dependent streak.
+ * We calculate totalCompletions separately without overwriting existing streak/bestStreak.
  */
 export function calculateInternalHabitStats(
   history: Record<string, { completed: boolean; timestamp?: string }> = {},
   referenceDateStr: string = getDateStringInTimezone(),
+  existingStreak: number = 0,
   existingBestStreak: number = 0
 ): { streak: number; bestStreak: number; totalCompletions: number } {
   const completedDates = Object.keys(history).filter(
@@ -398,8 +421,8 @@ export function calculateInternalHabitStats(
   const totalCompletions = completedDates.length;
 
   return {
-    streak: totalCompletions,
-    bestStreak: Math.max(existingBestStreak || 0, totalCompletions),
+    streak: existingStreak,
+    bestStreak: existingBestStreak,
     totalCompletions,
   };
 }
@@ -556,7 +579,9 @@ export function calculatePostponedTask(
 ): Partial<Task> | null {
   if (typeof minutesOrDate === 'string') {
     const trimmed = minutesOrDate.trim();
-    if (!trimmed) return null;
+    if (!isValidYMD(trimmed)) {
+      return null;
+    }
     return {
       date: trimmed,
       status: 'postponed',

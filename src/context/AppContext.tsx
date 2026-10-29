@@ -307,23 +307,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const postponeTask = (id: string, minutesOrDate: number | string) => {
-    let success = false;
-    setTasks(prev =>
-      prev.map(t => {
-        if (t.id === id) {
-          const updates = calculatePostponedTask(t, minutesOrDate, new Date(), settings.timezone);
-          if (!updates) {
-            return t;
-          }
-          success = true;
-          return { ...t, ...updates };
-        }
-        return t;
-      })
-    );
-    if (success) {
-      triggerHaptic('light');
+    const targetTask = tasks.find(t => t.id === id);
+    if (!targetTask) return;
+
+    const now = new Date();
+    const updates = calculatePostponedTask(targetTask, minutesOrDate, now, settings.timezone);
+    if (!updates) {
+      return;
     }
+
+    setTasks(prev => prev.map(t => (t.id === id ? { ...t, ...updates } : t)));
+    triggerHaptic('light');
   };
 
   const deleteTask = (id: string, permanent: boolean = false) => {
