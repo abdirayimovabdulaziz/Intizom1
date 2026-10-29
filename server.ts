@@ -40,7 +40,7 @@ app.get('/api/health', (_req: Request, res: Response) => {
 // NLP parsing endpoint using Gemini 3.8 Flash
 app.post('/api/parse-nlp', async (req: Request, res: Response) => {
   try {
-    const { text, currentDate } = req.body;
+    const { text, currentDate, currentTime, timezone } = req.body;
     if (!text || typeof text !== 'string') {
       res.status(400).json({ error: 'Text kiritilishi shart' });
       return;
@@ -57,9 +57,11 @@ app.post('/api/parse-nlp', async (req: Request, res: Response) => {
     }
 
     const referenceDate = currentDate || new Date().toISOString().split('T')[0];
+    const targetTz = timezone || 'Asia/Tashkent';
+    const targetTime = currentTime || '12:00';
     const prompt = `
 Siz o'zbek tilidagi shaxsiy yordamchi ("Kunlik Yordamchi") uchun matnlarni tahlil qiluvchi AI tizimisiz.
-Bugungi sana: ${referenceDate}. Vaqt zonasi: Asia/Tashkent (UTC+5).
+Bugungi sana: ${referenceDate}. Hozirgi vaqt: ${targetTime}. Vaqt zonasi: ${targetTz}.
 
 Foydalanuvchi quyidagi matnni kiritdi: "${text}"
 

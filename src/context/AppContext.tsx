@@ -13,7 +13,16 @@ import {
   GoalInternalHabit,
   GoalProgressLog,
 } from '../types';
-import { formatDateYMD, formatUzbekDateLabel, formatSom, formatMoney, parseUzbekIntent } from '../utils/uzbekNlp';
+import {
+  formatDateYMD,
+  formatUzbekDateLabel,
+  formatSom,
+  formatMoney,
+  parseUzbekIntent,
+  buildHabitCreatePayload,
+  buildExpenseCreatePayload,
+  buildTaskCreatePayload,
+} from '../utils/uzbekNlp';
 import { triggerHaptic } from '../utils/telegram';
 import {
   calculatePostponedTask,
@@ -1057,17 +1066,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       // EXPENSE CONFIRMATION
       if (payload.category === 'harajat') {
-        const createdExp = addExpense({
-          title: payload.title,
-          amount: payload.amount || 0,
-          currency: payload.currency || 'UZS',
-          category: payload.expenseCategory || 'shaxsiy',
-          date: payload.date || activeTodayStr,
-          time: payload.time || timeStr,
-          source: 'bot',
-        });
+        const buildRes = buildExpenseCreatePayload(payload, activeTodayStr, timeStr);
+        if (!buildRes.success) {
+          setMessages(prev => [
+            ...prev,
+            {
+              id: generateEntityId('conf-err'),
+              sender: 'bot',
+              text: `❌ Xarajatni saqlashda xatolik: ${buildRes.error}`,
+              timestamp: timeStr,
+            },
+          ]);
+          setMessages(prev => prev.map(m => (m.id === messageId ? { ...m, actions: undefined } : m)));
+          return;
+        }
 
-        const formattedMoneyStr = formatMoney(createdExp.amount, createdExp.currency || 'UZS');
+        const createdExp = addExpense(buildRes.payload);
+        const formattedMoneyStr = formatMoney(createdExp.amount, createdExp.currency);
 
         setMessages(prev => [
           ...prev,
@@ -1090,6 +1105,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
       // HEALTH INTAKE (Qabul - Kreatin, L-Arginin, Asalli suv)
       else if (payload.category === 'qabul') {
+        const buildRes = buildHabitCreatePayload(payload);
+        if (!buildRes.success) {
+          setMessages(prev => [
+            ...prev,
+            {
+              id: generateEntityId('conf-err'),
+              sender: 'bot',
+              text: `❌ Qabulni saqlashda xatolik: ${buildRes.error}`,
+              timestamp: timeStr,
+            },
+          ]);
+          setMessages(prev => prev.map(m => (m.id === messageId ? { ...m, actions: undefined } : m)));
+          return;
+        }
+
         // Check if habit already exists
         const existing = habits.find(
           h => h.title.toLowerCase().includes(payload.title.toLowerCase()) ||
@@ -1119,21 +1149,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             },
           ]);
         } else {
-          // Create new habit
-          const created = addHabit({
-            title: payload.title,
-            category: 'odat',
-            habitType: 'supplement_health',
-            dosage: payload.dosage || undefined,
-            timeSlot: payload.timeSlot || undefined,
-            frequency: payload.frequency || 'daily',
-            daysOfWeek: payload.daysOfWeek && payload.daysOfWeek.length > 0 ? payload.daysOfWeek : [1, 2, 3, 4, 5, 6, 7],
-            targetDaysPerWeek: payload.targetDaysPerWeek || undefined,
-            hasQuantity: !!payload.quantity,
-            targetQuantity: payload.quantity || undefined,
-            unit: payload.unit || (payload.dosage ? undefined : 'qabul'),
-          });
-
+          const created = addHabit(buildRes.payload);
           if (payload.markDoneToday) {
             toggleHabitToday(created.id);
           }
@@ -1159,15 +1175,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
       // TASK OR MEETING
       else if (payload.category === 'vazifa' || payload.category === 'uchrashuv') {
-        const createdTask = addTask({
-          title: payload.title,
-          category: payload.category,
-          date: payload.date || activeTodayStr,
-          time: payload.time || undefined,
-          status: 'pending',
-          priority: 'medium',
-          source: 'bot',
-        });
+        const buildRes = buildTaskCreatePayload(payload, activeTodayStr);
+        if (!buildRes.success) {
+          setMessages(prev => [
+            ...prev,
+            {
+              id: generateEntityId('conf-err'),
+              sender: 'bot',
+              text: `❌ Vazifani saqlashda xatolik: ${buildRes.error}`,
+              timestamp: timeStr,
+            },
+          ]);
+          setMessages(prev => prev.map(m => (m.id === messageId ? { ...m, actions: undefined } : m)));
+          return;
+        }
+
+        const createdTask = addTask(buildRes.payload);
 
         setMessages(prev => [
           ...prev,
@@ -1194,19 +1217,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           },
         ]);
       } else if (payload.category === 'odat') {
-        const habitFrequency = payload.frequency || (payload.daysOfWeek && payload.daysOfWeek.length > 0 && payload.daysOfWeek.length < 7 ? 'specific_days' : 'daily');
-        const habitDaysOfWeek = payload.daysOfWeek && payload.daysOfWeek.length > 0 ? payload.daysOfWeek : [1, 2, 3, 4, 5, 6, 7];
-        const createdHabit = addHabit({
-          title: payload.title,
-          category: 'odat',
-          habitType: payload.habitType || 'general',
-          frequency: habitFrequency,
-          daysOfWeek: habitDaysOfWeek,
-          targetDaysPerWeek: payload.targetDaysPerWeek || undefined,
-          hasQuantity: !!(payload.quantity && payload.unit),
-          targetQuantity: payload.quantity || undefined,
-          unit: payload.unit || undefined,
-        });
+        const buildRes = buildHabitCreatePayload(payload);
+        if (!buildRes.success) {
+          setMessages(prev => [
+            ...prev,
+            {
+              id: generateEntityId('conf-err'),
+              sender: 'bot',
+              text: `❌ Odatni saqlashda xatolik: ${buildRes.error}`,
+              timestamp: timeStr,
+            },
+          ]);
+          setMessages(prev => prev.map(m => (m.id === messageId ? { ...m, actions: undefined } : m)));
+          return;
+        }
+
+        const createdHabit = addHabit(buildRes.payload);
 
         setMessages(prev => [
           ...prev,

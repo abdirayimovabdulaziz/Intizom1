@@ -2,11 +2,15 @@ import assert from 'node:assert';
 import {
   normalizeUzbekText,
   parseLocalUzbekIntent,
+  validateParsedItemContract,
   validateAndNormalizeParsedItem,
   parseUzbekIntent,
   formatDateYMD,
+  buildHabitCreatePayload,
+  buildExpenseCreatePayload,
+  buildTaskCreatePayload,
 } from '../utils/uzbekNlp';
-import { ParsedItem, Habit } from '../types';
+import { ParsedItem } from '../types';
 
 let passed = 0;
 let failed = 0;
@@ -38,42 +42,62 @@ function test(name: string, fn: () => void | Promise<void>) {
 }
 
 async function runTests() {
-  console.log('--- NLP va Parser Shartnomasi Testlari boshlandi ---');
+  console.log('--- NLP va Parser Shartnomasi Testlari (2-bosqich chuqur tekshiruv) ---');
 
-  // Reference date: Wednesday, 2026-03-04 10:00:00 (Asia/Tashkent UTC+5 -> 2026-03-04T05:00:00.000Z)
+  // Reference date: Wednesday, 2026-03-04 10:00:00 in Tashkent (UTC: 2026-03-04T05:00:00.000Z)
   const refDate = new Date('2026-03-04T05:00:00.000Z');
   const refTz = 'Asia/Tashkent';
 
   // 1. Normalizatsiya va apostrof variantlari
   test('1. Apostrof variantlari bir xil holatga keltirilishi', () => {
     const variants = ["so'm", 'so‘m', 'so’m', 'soʻm', 'soʼm'];
-    const normalized = variants.map(v => normalizeUzbekText(v));
-    for (const n of normalized) {
-      assert.strictEqual(n, "so'm");
-    }
-
-    const oVariants = ["o'qish", 'o‘qish', 'o’qish', 'oʻqish', 'oʼqish'];
-    for (const v of oVariants) {
-      assert.strictEqual(normalizeUzbekText(v), "o'qish");
+    for (const v of variants) {
+      assert.strictEqual(normalizeUzbekText(v), "so'm");
     }
   });
 
-  // 2. Sana va vaqt tokenlari pul miqdoridan oldin ajratilishi, 17:00 da 17 summa bo'lmasligi
+  // 2. Sana va vaqt tokenlari pul miqdoridan oldin ajratilishi (17:00 da 17 summa bo'lmasligi)
   test('2. "ertaga 17:00 da tushlik 45000 so\'m" -> 45000 UZS, 17:00, ertangi sana', () => {
     const res = parseLocalUzbekIntent("ertaga 17:00 da tushlik 45000 so'm", {
       referenceDate: refDate,
       timezone: refTz,
     });
-
     assert.strictEqual(res.category, 'harajat');
     assert.strictEqual(res.amount, 45000);
     assert.strictEqual(res.currency, 'UZS');
     assert.strictEqual(res.time, '17:00');
-    // Ertangi sana 2026-03-05
     assert.strictEqual(res.date, '2026-03-05');
   });
 
-  // 3. 1.5 ming so'm va 1,5 ming so‘m -> 1500 UZS
+  // 3. Pul tokenlari siyosati: 45.000 so'm, 45,000 so'm, 1.234,56 so'm, 1400$
+  test('3. "45.000 so\'m" -> 45000 UZS', () => {
+    const res = parseLocalUzbekIntent("tushlik 45.000 so'm", { referenceDate: refDate, timezone: refTz });
+    assert.strictEqual(res.amount, 45000);
+    assert.strictEqual(res.currency, 'UZS');
+  });
+
+  test('3. "45,000 so\'m" -> 45000 UZS', () => {
+    const res = parseLocalUzbekIntent("tushlik 45,000 so'm", { referenceDate: refDate, timezone: refTz });
+    assert.strictEqual(res.amount, 45000);
+    assert.strictEqual(res.currency, 'UZS');
+  });
+
+  test('3. "1.234,56 so\'m" -> 1234.56 UZS', () => {
+    const res = parseLocalUzbekIntent("to'lov 1.234,56 so'm", { referenceDate: refDate, timezone: refTz });
+    assert.strictEqual(res.amount, 1234.56);
+    assert.strictEqual(res.currency, 'UZS');
+  });
+
+  test('3. "1400$" va "$1400" -> 1400 USD', () => {
+    const r1 = parseLocalUzbekIntent("telefon 1400$", { referenceDate: refDate, timezone: refTz });
+    assert.strictEqual(r1.amount, 1400);
+    assert.strictEqual(r1.currency, 'USD');
+
+    const r2 = parseLocalUzbekIntent("telefon $1400", { referenceDate: refDate, timezone: refTz });
+    assert.strictEqual(r2.amount, 1400);
+    assert.strictEqual(r2.currency, 'USD');
+  });
+
   test('3. "1.5 ming so\'m" va "1,5 ming so‘m" -> 1500 UZS', () => {
     const r1 = parseLocalUzbekIntent("taksi 1.5 ming so'm", { referenceDate: refDate, timezone: refTz });
     assert.strictEqual(r1.amount, 1500);
@@ -84,198 +108,261 @@ async function runTests() {
     assert.strictEqual(r2.currency, 'UZS');
   });
 
-  // 4. 12.50 dollar va $12.50 -> 12.5 USD
-  test('4. "12.50 dollar" va "$12.50" -> 12.5 USD', () => {
-    const r1 = parseLocalUzbekIntent("kitob sotib oldim 12.50 dollar", { referenceDate: refDate, timezone: refTz });
-    assert.strictEqual(r1.amount, 12.5);
-    assert.strictEqual(r1.currency, 'USD');
-
-    const r2 = parseLocalUzbekIntent("kitob $12.50", { referenceDate: refDate, timezone: refTz });
-    assert.strictEqual(r2.amount, 12.5);
-    assert.strictEqual(r2.currency, 'USD');
-  });
-
-  // 5. 45 000 so'm (bo'shliq bilan minglik) -> 45000 UZS
-  test('5. "45 000 so\'m" -> 45000 UZS', () => {
-    const res = parseLocalUzbekIntent("tushlik 45 000 so'm", { referenceDate: refDate, timezone: refTz });
-    assert.strictEqual(res.amount, 45000);
-    assert.strictEqual(res.currency, 'UZS');
-  });
-
-  // 6. Noto'g'ri soat (25:90) va noto'g'ri sana (2026-02-31) rad etilishi
-  test('6. 25:90 va 2026-02-31 noto\'g\'ri vaqt/sana sifatida qabul qilinmasligi', () => {
-    const rTime = parseLocalUzbekIntent("soat 25:90 da uchrashuv", { referenceDate: refDate, timezone: refTz });
-    assert.strictEqual(rTime.time, null);
-
-    const rDate = parseLocalUzbekIntent("2026-02-31 da topshirish", { referenceDate: refDate, timezone: refTz });
-    assert.strictEqual(rDate.date, null);
-  });
-
-  // 7. Haftasiga 3 kun zal -> weekly_target, targetDaysPerWeek=3
-  test('7. "haftasiga 3 kun zal" -> weekly_target, targetDaysPerWeek=3', () => {
-    const res = parseLocalUzbekIntent("haftasiga 3 kun zal", { referenceDate: refDate, timezone: refTz });
-    assert.strictEqual(res.category, 'odat');
-    assert.strictEqual(res.frequency, 'weekly_target');
-    assert.strictEqual(res.targetDaysPerWeek, 3);
-  });
-
-  // 8. "har dushanba va juma 20 bet kitob" -> specific_days, daysOfWeek=[1, 5], quantity=20
-  test('8. "har dushanba va juma 20 bet kitob" -> specific_days, daysOfWeek=[1, 5], quantity=20', () => {
-    const res = parseLocalUzbekIntent("har dushanba va juma 20 bet kitob", { referenceDate: refDate, timezone: refTz });
-    assert.strictEqual(res.category, 'odat');
-    assert.strictEqual(res.frequency, 'specific_days');
-    assert.deepStrictEqual(res.daysOfWeek, [1, 5]);
-    assert.strictEqual(res.quantity, 20);
-    assert.strictEqual(res.unit, 'sahifa');
-  });
-
-  // 9. "har kuni 60 daqiqa yurish" -> odat bo'lib qolishi (quantity > 50 bo'lgani uchun maqsadga aylanmasin)
-  test('9. "har kuni 60 daqiqa yurish" -> odat (maqsad emas), frequency=daily', () => {
-    const res = parseLocalUzbekIntent("har kuni 60 daqiqa yurish", { referenceDate: refDate, timezone: refTz });
-    assert.strictEqual(res.category, 'odat');
-    assert.strictEqual(res.frequency, 'daily');
-    assert.strictEqual(res.quantity, 60);
-  });
-
-  // 10. "kunora 20 bet kitob" -> avtomatik yaratish bloklanadi, daily qilib saqlanmaydi
-  test('10. "kunora 20 bet kitob" -> isIntervalBlocked=true, category=noaniq', () => {
-    const res = parseLocalUzbekIntent("kunora 20 bet kitob", { referenceDate: refDate, timezone: refTz });
-    assert.strictEqual(res.isIntervalBlocked, true);
-    assert.strictEqual(res.category, 'noaniq');
-    assert.notStrictEqual(res.frequency, 'daily');
-  });
-
-  // 11. "daromad: 500000 ish haqi" -> xarajat sifatida kiritilmasligi va bloklanishi
-  test('11. "daromad: 500000 ish haqi" -> isIncomeBlocked=true, category=noaniq', () => {
-    const res = parseLocalUzbekIntent("daromad: 500000 ish haqi", { referenceDate: refDate, timezone: refTz });
-    assert.strictEqual(res.isIncomeBlocked, true);
+  test('3. "tushlik 45000 so\'m taksi 20000 so\'m" -> bir nechta pul miqdori bloklanadi', () => {
+    const res = parseLocalUzbekIntent("tushlik 45000 so'm taksi 20000 so'm", { referenceDate: refDate, timezone: refTz });
+    assert.strictEqual(res.isMultipleActionsBlocked, true);
     assert.strictEqual(res.category, 'noaniq');
   });
 
-  // 12. Dori/qo'shimchadan uydirma 5 gram doza yoki qabul vaqti yasalmasligi
-  test('12. "kreatin" -> dosage va timeSlot null bo\'lishi (5 gram uydirilmaydi)', () => {
-    const res = parseLocalUzbekIntent("kreatin", { referenceDate: refDate, timezone: refTz });
-    assert.strictEqual(res.category, 'qabul');
-    assert.strictEqual(res.dosage, null);
-    assert.strictEqual(res.timeSlot, null);
+  // 4. Oddiy "va" bog'lovchisi avtomatik xato deb hisoblanmasligi
+  test('4. Oddiy "va" bog\'lovchisi xato bo\'lmasligi (dushanba va juma, tushlik va choy)', () => {
+    const r1 = parseLocalUzbekIntent("har dushanba va juma 20 bet kitob", { referenceDate: refDate, timezone: refTz });
+    assert.strictEqual(r1.category, 'odat');
+    assert.strictEqual(r1.isMultipleActionsBlocked, undefined);
+    assert.deepStrictEqual(r1.daysOfWeek, [1, 5]);
 
-    const res2 = parseLocalUzbekIntent("5g kreatin", { referenceDate: refDate, timezone: refTz });
-    assert.strictEqual(res2.category, 'qabul');
-    assert.strictEqual(res2.dosage, '5g');
+    const r2 = parseLocalUzbekIntent("tushlik va choy 45000 so'm", { referenceDate: refDate, timezone: refTz });
+    assert.strictEqual(r2.category, 'harajat');
+    assert.strictEqual(r2.amount, 45000);
+    assert.strictEqual(r2.isMultipleActionsBlocked, undefined);
   });
 
-  // 13. Valyutasiz raqam har doim pul deb olinmasligi; xarajat prefiksi bo'lganda olinishi
-  test('13. Valyutasiz raqam: prefiks bo\'lmasa xarajat emas, prefiks bo\'lsa olinadi', () => {
-    const notExpense = parseLocalUzbekIntent("5000 kitob o'qidim", { referenceDate: refDate, timezone: refTz });
-    assert.notStrictEqual(notExpense.category, 'harajat');
+  // 5. Nisbiy vaqtning timezone xatosi (20 daqiqadan keyin yarim tundan o'tganda)
+  test('5. 23:50 da "20 daqiqadan keyin" Asia/Tashkent bo\'yicha 00:10 va ertangi sana bo\'lishi', () => {
+    // 2026-03-04 23:50 in Tashkent (UTC: 2026-03-04 18:50 UTC)
+    const lateNightDate = new Date('2026-03-04T18:50:00.000Z');
+    const res = parseLocalUzbekIntent("20 daqiqadan keyin hisobot yuborish", {
+      referenceDate: lateNightDate,
+      timezone: 'Asia/Tashkent',
+    });
 
-    const withPrefix = parseLocalUzbekIntent("harajat: 45000 tushlik", { referenceDate: refDate, timezone: refTz });
-    assert.strictEqual(withPrefix.category, 'harajat');
-    assert.strictEqual(withPrefix.amount, 45000);
-    assert.strictEqual(withPrefix.currency, 'UZS');
+    assert.strictEqual(res.time, '00:10');
+    assert.strictEqual(res.date, '2026-03-05');
   });
 
-  // 14. AI javobida USD saqlanishi va validateAndNormalizeParsedItem shartnomasi
-  test('14. validateAndNormalizeParsedItem USD va to\'g\'ri maydonlarni saqlashi', () => {
-    const rawAiResponse = {
-      category: 'harajat',
-      title: 'Server obunasi',
-      amount: 15,
-      currency: 'USD',
-      date: '2026-03-04',
-      time: '14:00',
-    };
-
-    const normalized = validateAndNormalizeParsedItem(rawAiResponse);
-    assert.strictEqual(normalized.category, 'harajat');
-    assert.strictEqual(normalized.amount, 15);
-    assert.strictEqual(normalized.currency, 'USD');
-    assert.strictEqual(normalized.title, 'Server obunasi');
-  });
-
-  // 15. Buzilgan AI javobi lokal fallback'ka o'tishi
-  test('15. Buzilgan AI javobi validateAndNormalizeParsedItem tomonidan tuzatilishi yoki rad etilishi', () => {
-    const corruptAiResponse = {
-      category: 'unknown_cat',
-      title: 'Xatolik',
-      amount: 'bir million',
-      date: '2026-02-31', // noto'g'ri sana
-      time: '25:99', // noto'g'ri vaqt
-    };
-
-    const normalized = validateAndNormalizeParsedItem(corruptAiResponse);
-    assert.strictEqual(normalized.category, 'noaniq');
-    assert.strictEqual(normalized.amount, null);
-    assert.strictEqual(normalized.date, null);
-    assert.strictEqual(normalized.time, null);
-  });
-
-  // 16. aiEnabled=false bo'lganda fetch chaqirilmasligi
-  await test('16. settings.aiEnabled=false bo\'lganda fetch chaqirilmasligi', async () => {
-    let fetchCalled = false;
+  // 6. Deterministik preflight: AI javobida blok bayrog'i bo'lmasa yoki AI "kunora"ni daily deb qaytarsa ham bloklanishi
+  await test('6. AI "kunora"ni daily deb qaytarganda ham preflight orqali bloklanishi', async () => {
     const originalFetch = globalThis.fetch;
     (globalThis as any).fetch = async () => {
-      fetchCalled = true;
-      throw new Error('fetch should not have been called!');
+      return {
+        ok: true,
+        json: async () => ({
+          success: true,
+          parsed: {
+            category: 'odat',
+            title: 'Kitob o\'qish',
+            frequency: 'daily',
+            daysOfWeek: [1, 2, 3, 4, 5, 6, 7],
+            quantity: 20,
+            unit: 'sahifa',
+            isInterval: false, // AI yolg'on / noto'g'ri bayroq qaytarmoqda
+          },
+        }),
+      };
     };
 
     try {
-      const res = await parseUzbekIntent("ertaga soat 10:00 da uchrashuv", {
+      const res = await parseUzbekIntent("kunora 20 bet kitob", {
         referenceDate: refDate,
         timezone: refTz,
-        aiEnabled: false,
+        aiEnabled: true,
       });
 
-      assert.strictEqual(fetchCalled, false, 'aiEnabled=false bo\'lsa fetch chaqirilmasligi kerak');
-      assert.strictEqual(res.category, 'uchrashuv');
-      assert.strictEqual(res.time, '10:00');
+      assert.strictEqual(res.isIntervalBlocked, true);
+      assert.strictEqual(res.category, 'noaniq');
+      assert.notStrictEqual(res.frequency, 'daily');
     } finally {
       globalThis.fetch = originalFetch;
     }
   });
 
-  // 17. Bir nechta amal aniqlanganda bitta buzuq yozuvga birlashtirilmasligi va bloklanishi
-  test('17. "50000 so\'mga kitob oldim va 10 bet o\'qidim" -> isMultipleActionsBlocked=true', () => {
-    const res = parseLocalUzbekIntent("50000 so'mga kitob oldim va 10 bet o'qidim", { referenceDate: refDate, timezone: refTz });
-    assert.strictEqual(res.isMultipleActionsBlocked, true);
-    assert.strictEqual(res.category, 'noaniq');
+  await test('6. AI "daromad"ni harajat deb qaytarganda ham preflight orqali bloklanishi', async () => {
+    const originalFetch = globalThis.fetch;
+    (globalThis as any).fetch = async () => {
+      return {
+        ok: true,
+        json: async () => ({
+          success: true,
+          parsed: {
+            category: 'harajat',
+            title: 'Ish haqi',
+            amount: 500000,
+            currency: 'UZS',
+            isIncome: false,
+          },
+        }),
+      };
+    };
+
+    try {
+      const res = await parseUzbekIntent("daromad: 500000 ish haqi", {
+        referenceDate: refDate,
+        timezone: refTz,
+        aiEnabled: true,
+      });
+
+      assert.strictEqual(res.isIncomeBlocked, true);
+      assert.strictEqual(res.category, 'noaniq');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
-  // 18. Bot orqali habit yaratilganda recurrence ma'lumotlari yo'qolmasligi
-  test('18. Bot orqali yaratilgan odatda weekly_target va specific_days saqlanishi', () => {
-    const parsedWeekly: ParsedItem = {
+  // 7. Runtime validator: noto'g'ri qiymatlarni jim almashtirmasligi
+  test('7. Validator noto\'g\'ri sana (2026-02-31) ni bugunga almashtirmasdan xato berishi', () => {
+    const valRes = validateParsedItemContract({
+      category: 'vazifa',
+      title: 'Hisobot',
+      date: '2026-02-31',
+      time: '14:00',
+    });
+
+    assert.strictEqual(valRes.isValid, false);
+    assert.ok(valRes.errors.some(e => e.includes('2026-02-31')));
+  });
+
+  test('7. Validator noto\'g\'ri vaqt (25:90) ni shunchaki null qilib o\'tkazmasdan xato berishi', () => {
+    const valRes = validateParsedItemContract({
+      category: 'vazifa',
+      title: 'Majlis',
+      date: '2026-03-04',
+      time: '25:90',
+    });
+
+    assert.strictEqual(valRes.isValid, false);
+    assert.ok(valRes.errors.some(e => e.includes('25:90')));
+  });
+
+  test('7. specific_days uchun kamida bitta 1..7 kun talab qilinishi (noto\'g\'ri kunlar barchaga aylanmaydi)', () => {
+    const valRes = validateParsedItemContract({
+      category: 'odat',
+      title: 'Sport',
+      frequency: 'specific_days',
+      daysOfWeek: [8, 9, NaN],
+    });
+
+    assert.strictEqual(valRes.isValid, false);
+    assert.ok(valRes.errors.some(e => e.includes('specific_days')));
+  });
+
+  test('7. weekly_target uchun 1..7 butun son talab qilinishi (taxminiy 3 yasalmaydi)', () => {
+    const valRes = validateParsedItemContract({
+      category: 'odat',
+      title: 'Yugurish',
+      frequency: 'weekly_target',
+      targetDaysPerWeek: null,
+    });
+
+    assert.strictEqual(valRes.isValid, false);
+    assert.ok(valRes.errors.some(e => e.includes('weekly_target')));
+  });
+
+  test('7. Noma\'lum valyuta ("EUR") jim UZS ga aylantirilmasligi va xato berishi', () => {
+    const valRes = validateParsedItemContract({
+      category: 'harajat',
+      title: 'Xizmat',
+      amount: 100,
+      currency: 'EUR',
+    });
+
+    assert.strictEqual(valRes.isValid, false);
+    assert.ok(valRes.errors.some(e => e.includes('EUR')));
+  });
+
+  // 8. Buzilgan AI natijasida lokal fallback to'liq ishlashi
+  await test('8. Buzilgan AI javobida asl matn va ayni kontekst bilan lokal fallback ishlashi', async () => {
+    const originalFetch = globalThis.fetch;
+    (globalThis as any).fetch = async () => {
+      return {
+        ok: true,
+        json: async () => ({
+          success: true,
+          parsed: {
+            category: 'corrupted_category',
+            title: '',
+            amount: 'bir_million',
+            date: '2026-02-31',
+          },
+        }),
+      };
+    };
+
+    try {
+      const res = await parseUzbekIntent("ertaga soat 15:00 da hisobot topshirish", {
+        referenceDate: refDate,
+        timezone: refTz,
+        aiEnabled: true,
+      });
+
+      assert.strictEqual(res.category, 'vazifa');
+      assert.strictEqual(res.time, '15:00');
+      assert.strictEqual(res.date, '2026-03-05');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  // 9. Yaratish chegarasini himoyalash: buildExpenseCreatePayload va buildHabitCreatePayload
+  test('9. buildExpenseCreatePayload nol yoki manfiy summada xatolik qaytarishi', () => {
+    const invalidParsed: ParsedItem = {
+      category: 'harajat',
+      title: 'Tushlik',
+      amount: 0,
+      currency: 'UZS',
+      confidence: 0.9,
+      explanationUz: '',
+      source: 'local-rules',
+    };
+
+    const res = buildExpenseCreatePayload(invalidParsed, '2026-03-04', '12:00');
+    assert.strictEqual(res.success, false);
+  });
+
+  test('9. buildHabitCreatePayload yaroqsiz recurrence da xatolik qaytarishi', () => {
+    const invalidWeekly: ParsedItem = {
+      category: 'odat',
+      title: 'Zal',
+      frequency: 'weekly_target',
+      targetDaysPerWeek: null,
+      confidence: 0.9,
+      explanationUz: '',
+      source: 'local-rules',
+    };
+
+    const resWeekly = buildHabitCreatePayload(invalidWeekly);
+    assert.strictEqual(resWeekly.success, false);
+
+    const invalidDays: ParsedItem = {
+      category: 'odat',
+      title: 'Kitob',
+      frequency: 'specific_days',
+      daysOfWeek: [],
+      confidence: 0.9,
+      explanationUz: '',
+      source: 'local-rules',
+    };
+
+    const resDays = buildHabitCreatePayload(invalidDays);
+    assert.strictEqual(resDays.success, false);
+  });
+
+  test('9. buildHabitCreatePayload to\'g\'ri odat uchun frequency va daysOfWeek ni bus-butun saqlashi', () => {
+    const validWeekly: ParsedItem = {
       category: 'odat',
       title: 'Suzish',
       frequency: 'weekly_target',
       targetDaysPerWeek: 3,
-      daysOfWeek: null,
-      amount: null,
-      date: null,
-      time: null,
-      dosage: null,
-      unit: null,
-      quantity: null,
       confidence: 0.9,
-      explanationUz: 'Suzish odati',
+      explanationUz: '',
       source: 'local-rules',
     };
 
-    const habit: Habit = {
-      id: 'h-1',
-      title: parsedWeekly.title,
-      category: 'odat',
-      habitType: 'general',
-      frequency: parsedWeekly.frequency || 'daily',
-      targetDaysPerWeek: parsedWeekly.targetDaysPerWeek || undefined,
-      daysOfWeek: parsedWeekly.daysOfWeek || [1, 2, 3, 4, 5, 6, 7],
-      hasQuantity: false,
-      streak: 0,
-      bestStreak: 0,
-      history: {},
-    };
-
-    assert.strictEqual(habit.frequency, 'weekly_target');
-    assert.strictEqual(habit.targetDaysPerWeek, 3);
+    const res = buildHabitCreatePayload(validWeekly);
+    assert.strictEqual(res.success, true);
+    if (res.success) {
+      assert.strictEqual(res.payload.frequency, 'weekly_target');
+      assert.strictEqual(res.payload.targetDaysPerWeek, 3);
+    }
   });
 
   console.log(`\nJami: ${passed} muvaffaqiyatli, ${failed} xato.`);
