@@ -119,7 +119,14 @@ export interface ParsedItem {
   expenseCategory?: ExpenseCategory | null;
   dosage?: string | null;
   timeSlot?: string | null;
-  daysOfWeek?: (number | string)[] | null;
+  daysOfWeek?: number[] | null;
+  frequency?: HabitFrequency | null;
+  targetDaysPerWeek?: number | null;
+  habitType?: HabitType | null;
+  isIncomeBlocked?: boolean;
+  isIntervalBlocked?: boolean;
+  isMultipleActionsBlocked?: boolean;
+  clarificationNeeded?: string | null;
   confidence: number;
   explanationUz: string;
   source: 'gemini-ai' | 'local-rules';

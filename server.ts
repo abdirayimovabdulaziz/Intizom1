@@ -63,32 +63,23 @@ Bugungi sana: ${referenceDate}. Vaqt zonasi: Asia/Tashkent (UTC+5).
 
 Foydalanuvchi quyidagi matnni kiritdi: "${text}"
 
-Matndan quyidagilarni ajrating va FAQAT belgilangan JSON formatida qaytaring:
-- category:
-  * "harajat" (pul sarfi, xarajat, masalan: "harajat: 45000 tushlik", "sarf: 120000 taksi", "50000 so'm kitob")
-  * "qabul" (kunlik salomatlik, dori, vitamin, qo'shimchalar, masalan: "5g kreatin", "l-arginin", "ertalab asalli suv", "vitamin D")
-  * "vazifa" (bir marta bajariladigan ish, topshiriq)
-  * "odat" (takrorlanadigan umumiy odat)
-  * "maqsad" (uzoq muddatli strategik natija)
-  * "uchrashuv" (aniq uchrashuv tadbiri)
-  * "noaniq"
-- title: toza nomi (soat, sana, summa va kalit so'zlarsiz)
-- amount: raqam (agar harajat bo'lsa so'm miqdori, masalan 45000 yoki null)
-- expenseCategory: agar harajat bo'lsa "oziq_ovqat" | "transport" | "salomatlik" | "sport" | "talim" | "shaxsiy" | "boshqa" yoki null
-- dosage: qabul bo'lsa miqdori (masalan: "5 gram", "1 stakan", "3 kapsula" yoki null)
-- timeSlot: qabul vaqti (masalan: "Ertalab nahorga", "Mashg'ulotdan oldin", "Mashg'ulotdan keyin", "Kechqurun" yoki null)
-- date: "YYYY-MM-DD" formati
-- time: "HH:mm" 24-soatlik vaqt yoki null
-- quantity: raqam yoki null
-- unit: o'lchov birligi (sahifa, daqiqa, litr, gram, km, yoki null)
-- explanationUz: Foydalanuvchiga tushunarli o'zbekcha qisqa izoh
-- confidence: 0 dan 1 gacha
+QOIDALAR:
+1. Foydalanuvchi aytmagan summa, doza, vaqt yoki takrorlanish qoidasini o'ylab topmang (masalan: "kreatin" yozilgan bo'lsa, dosage: null qoldiring, "5 gram" yasab olmang).
+2. Daromad ("daromad: 500000 ish haqi", "oylik tushdi", "kirim:") kiritilsa, isIncome: true belgilang va uni harajat qilib yaratmang.
+3. "kunora" kiritilsa, isInterval: true belgilang va uni daily deb saqlamang.
+4. Bir matnda bir nechta amal bo'lsa (masalan: "tushlik 45000 va 5g kreatin"), isMultipleActions: true belgilang.
+5. Pul va valyuta: UZS (so'm) yoki USD ($ / dollar). Masalan: "12.50 dollar" -> amount: 12.5, currency: "USD".
+6. Takrorlanish:
+   - "haftasiga 3 kun zal" -> category: "odat", frequency: "weekly_target", targetDaysPerWeek: 3
+   - "har dushanba va juma 20 bet kitob" -> category: "odat", frequency: "specific_days", daysOfWeek: [1, 5], quantity: 20, unit: "sahifa"
+   - "har kuni 60 daqiqa yurish" -> category: "odat", frequency: "daily", quantity: 60, unit: "daqiqa"
 
-Qat'iy faqat JSON qaytaring:
+Qat'iy faqat quyidagi JSON formatida qaytaring:
 {
   "category": "harajat" | "qabul" | "vazifa" | "odat" | "maqsad" | "uchrashuv" | "noaniq",
   "title": string,
   "amount": number | null,
+  "currency": "UZS" | "USD" | null,
   "expenseCategory": string | null,
   "dosage": string | null,
   "timeSlot": string | null,
@@ -96,6 +87,12 @@ Qat'iy faqat JSON qaytaring:
   "time": string | null,
   "quantity": number | null,
   "unit": string | null,
+  "frequency": "daily" | "weekly_target" | "specific_days" | null,
+  "targetDaysPerWeek": number | null,
+  "daysOfWeek": number[] | null,
+  "isIncome": boolean,
+  "isInterval": boolean,
+  "isMultipleActions": boolean,
   "explanationUz": string,
   "confidence": number
 }
@@ -109,17 +106,22 @@ Qat'iy faqat JSON qaytaring:
       },
     });
 
-    const timeoutPromise = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error('AI tahlilida vaqt tugadi (timeout)')), 3000)
-    );
-
-    const response = await Promise.race([generatePromise, timeoutPromise]);
-    const parsedJson = JSON.parse(response.text || '{}');
-    res.json({
-      success: true,
-      parsed: parsedJson,
-      source: 'gemini-ai',
+    let timer: NodeJS.Timeout | undefined;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error('AI tahlilida vaqt tugadi (timeout)')), 3000);
     });
+
+    try {
+      const response = await Promise.race([generatePromise, timeoutPromise]);
+      const parsedJson = JSON.parse(response.text || '{}');
+      res.json({
+        success: true,
+        parsed: parsedJson,
+        source: 'gemini-ai',
+      });
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   } catch (error: any) {
     console.warn('NLP parse using local fallback:', error?.message);
     res.json({

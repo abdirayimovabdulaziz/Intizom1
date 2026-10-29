@@ -597,7 +597,63 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
 
       // 2. Parse text with Gemini AI or local rule fallback
-      const parsed: ParsedItem = await parseUzbekIntent(trimmed);
+      const parsed: ParsedItem = await parseUzbekIntent(trimmed, {
+        referenceDate: new Date(),
+        timezone: settings.timezone,
+        aiEnabled: settings.aiEnabled,
+      });
+
+      // Handle Blocked Income
+      if (parsed.isIncomeBlocked) {
+        const botReply: ChatMessage = {
+          id: generateEntityId('msg-bot'),
+          sender: 'bot',
+          text: `ℹ️ **Daromad hisobi:**\nHozircha ilovada faqat xarajatlar tahlili qo'llab-quvvatlanadi. Daromadlarni kiritish keyingi bosqichlarda qo'shiladi. Ushbu yozuv xarajat sifatida kiritilmadi.`,
+          timestamp: getTimeString(),
+        };
+        setMessages(prev => [...prev, botReply]);
+        setIsAiProcessing(false);
+        return;
+      }
+
+      // Handle Blocked Interval Schedule ("kunora")
+      if (parsed.isIntervalBlocked) {
+        const botReply: ChatMessage = {
+          id: generateEntityId('msg-bot'),
+          sender: 'bot',
+          text: `⚠️ **Kunora takrorlanish jadvali:**\n"Kunora" jadvali hozircha avtomatik qo'llab-quvvatlanmaydi. Iltimos, quyidagi jadvallardan birini tanlang:\n• Har kuni (\`har kuni ...\`)\n• Haftaning ma'lum kunlari (\`har dushanba va juma ...\`)\n• Haftasiga ma'lum kun (\`haftasiga 3 kun ...\`)`,
+          timestamp: getTimeString(),
+        };
+        setMessages(prev => [...prev, botReply]);
+        setIsAiProcessing(false);
+        return;
+      }
+
+      // Handle Blocked Multiple Actions in one message
+      if (parsed.isMultipleActionsBlocked) {
+        const botReply: ChatMessage = {
+          id: generateEntityId('msg-bot'),
+          sender: 'bot',
+          text: `⚠️ **Bir nechta amal aniqlandi:**\nXatoliklarning oldini olish uchun, iltimos, har bir vazifa, xarajat yoki odatni alohida xabar sifatida yuboring.`,
+          timestamp: getTimeString(),
+        };
+        setMessages(prev => [...prev, botReply]);
+        setIsAiProcessing(false);
+        return;
+      }
+
+      // Handle Explicit Clarification Request
+      if (parsed.clarificationNeeded) {
+        const botReply: ChatMessage = {
+          id: generateEntityId('msg-bot'),
+          sender: 'bot',
+          text: `❓ **Aniqlashtirish zarur:**\n${parsed.clarificationNeeded}`,
+          timestamp: getTimeString(),
+        };
+        setMessages(prev => [...prev, botReply]);
+        setIsAiProcessing(false);
+        return;
+      }
 
       // Handle Ambiguous input
       if (parsed.category === 'noaniq') {
@@ -619,14 +675,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               id: 'clarify-harajat',
               label: '💰 Xarajat',
               action: 'clarify_type',
-              payload: { category: 'harajat', title: parsed.title, amount: parsed.amount || 20000 },
+              payload: { category: 'harajat', title: parsed.title, amount: parsed.amount, currency: parsed.currency || 'UZS' },
               variant: 'primary',
             },
             {
               id: 'clarify-qabul',
               label: '💊 Salomatlik / Qabul',
               action: 'clarify_type',
-              payload: { category: 'qabul', title: parsed.title, dosage: parsed.dosage || '5g' },
+              payload: { category: 'qabul', title: parsed.title, dosage: parsed.dosage },
               variant: 'secondary',
             },
             {
@@ -655,7 +711,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       // EXPENSE (HARAJAT)
       if (parsed.category === 'harajat') {
-        const amountDisplay = parsed.amount ? formatSom(parsed.amount) : '0 so\'m';
+        const amountDisplay = parsed.amount ? formatMoney(parsed.amount, parsed.currency || 'UZS') : '0 so\'m';
         const categoryLabel = parsed.expenseCategory ? parsed.expenseCategory.replace('_', ' ') : 'shaxsiy';
 
         responseText = `💸 **Yangi Xarajat aniqlandi:**\n\n📌 **Nomi:** ${parsed.title}\n💰 **Summa:** ${amountDisplay}\n🏷 **Toifa:** ${categoryLabel}\n📅 **Sana:** Bugun (${parsed.date || activeTodayStr})`;
@@ -738,7 +794,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (parsed.quantity && parsed.unit) {
           responseText += `\n🎯 **Miqdor rejasi:** ${parsed.quantity} ${parsed.unit}/kun`;
         }
-        responseText += `\n📅 **Davriyligi:** ${(parsed.daysOfWeek as any)?.includes('daily') ? 'Har kuni' : 'Haftaning tanlangan kunlari'}`;
+        let freqLabel = 'Har kuni';
+        if (parsed.frequency === 'weekly_target' && parsed.targetDaysPerWeek) {
+          freqLabel = `Haftasiga ${parsed.targetDaysPerWeek} kun`;
+        } else if (parsed.frequency === 'specific_days' && parsed.daysOfWeek && parsed.daysOfWeek.length > 0) {
+          freqLabel = 'Haftaning tanlangan kunlari';
+        }
+        responseText += `\n📅 **Davriyligi:** ${freqLabel}`;
 
         actions.push(
           {
@@ -1064,11 +1126,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             habitType: 'supplement_health',
             dosage: payload.dosage || undefined,
             timeSlot: payload.timeSlot || undefined,
-            frequency: 'daily',
-            daysOfWeek: [1, 2, 3, 4, 5, 6, 7],
+            frequency: payload.frequency || 'daily',
+            daysOfWeek: payload.daysOfWeek && payload.daysOfWeek.length > 0 ? payload.daysOfWeek : [1, 2, 3, 4, 5, 6, 7],
+            targetDaysPerWeek: payload.targetDaysPerWeek || undefined,
             hasQuantity: !!payload.quantity,
             targetQuantity: payload.quantity || undefined,
-            unit: payload.unit || 'gram',
+            unit: payload.unit || (payload.dosage ? undefined : 'qabul'),
           });
 
           if (payload.markDoneToday) {
@@ -1131,12 +1194,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           },
         ]);
       } else if (payload.category === 'odat') {
+        const habitFrequency = payload.frequency || (payload.daysOfWeek && payload.daysOfWeek.length > 0 && payload.daysOfWeek.length < 7 ? 'specific_days' : 'daily');
+        const habitDaysOfWeek = payload.daysOfWeek && payload.daysOfWeek.length > 0 ? payload.daysOfWeek : [1, 2, 3, 4, 5, 6, 7];
         const createdHabit = addHabit({
           title: payload.title,
           category: 'odat',
-          habitType: 'general',
-          frequency: (payload.daysOfWeek as any)?.includes('daily') ? 'daily' : 'specific_days',
-          daysOfWeek: [1, 2, 3, 4, 5, 6, 7],
+          habitType: payload.habitType || 'general',
+          frequency: habitFrequency,
+          daysOfWeek: habitDaysOfWeek,
+          targetDaysPerWeek: payload.targetDaysPerWeek || undefined,
           hasQuantity: !!(payload.quantity && payload.unit),
           targetQuantity: payload.quantity || undefined,
           unit: payload.unit || undefined,
@@ -1195,9 +1261,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } else if (action.action === 'clarify_type' && action.payload) {
       const p = action.payload;
       if (p.category === 'harajat') {
-        addExpense({
+        if (!p.amount) {
+          setMessages(prev => [
+            ...prev,
+            {
+              id: generateEntityId('res'),
+              sender: 'bot',
+              text: `Iltimos, "${p.title}" uchun xarajat summasini kiriting (masalan: "${p.title} 45000 so'm").`,
+              timestamp: timeStr,
+            },
+          ]);
+          setMessages(prev =>
+            prev.map(m => (m.id === messageId ? { ...m, actions: undefined } : m))
+          );
+          return;
+        }
+        const createdExp = addExpense({
           title: p.title,
-          amount: p.amount || 20000,
+          amount: p.amount,
+          currency: p.currency || 'UZS',
           category: 'shaxsiy',
           date: activeTodayStr,
           time: timeStr,
@@ -1208,7 +1290,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           {
             id: generateEntityId('res'),
             sender: 'bot',
-            text: `💸 Xarajat saqlandi: "${p.title}" (${formatSom(p.amount || 20000)})`,
+            text: `💸 Xarajat saqlandi: "${p.title}" (${formatMoney(createdExp.amount, createdExp.currency || 'UZS')})`,
             timestamp: timeStr,
             actions: [{ id: 'opn', label: '📱 Xarajatlarni ochish', action: 'open_miniapp', payload: { tab: 'harajatlar' }, variant: 'primary' }],
           },
@@ -1218,13 +1300,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           title: p.title,
           category: 'odat',
           habitType: 'supplement_health',
-          dosage: p.dosage || '5 gram',
+          dosage: p.dosage || undefined,
           timeSlot: 'Kunlik',
           frequency: 'daily',
           daysOfWeek: [1, 2, 3, 4, 5, 6, 7],
-          hasQuantity: true,
-          targetQuantity: 1,
-          unit: 'qabul',
+          hasQuantity: !!p.quantity,
+          targetQuantity: p.quantity || 1,
+          unit: p.unit || 'qabul',
         });
         setMessages(prev => [
           ...prev,
