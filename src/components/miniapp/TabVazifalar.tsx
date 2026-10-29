@@ -5,6 +5,7 @@ import {
   formatDateYMD,
   formatUzbekDateLabel,
 } from '../../utils/uzbekNlp';
+import { addDaysToYMD } from '../../utils/domainCalculations';
 import {
   CheckCircle2,
   Circle,
@@ -29,6 +30,8 @@ export const TabVazifalar: React.FC<{
   setIsAddModalOpen: (open: boolean) => void;
 }> = ({ isAddModalOpen, setIsAddModalOpen }) => {
   const {
+    todayStr,
+    todayDayOfWeek,
     tasks,
     habits,
     toggleHabitToday,
@@ -45,7 +48,6 @@ export const TabVazifalar: React.FC<{
   const [activeMenuTaskId, setActiveMenuTaskId] = useState<string | null>(null);
 
   // New task form state
-  const todayStr = formatDateYMD(new Date());
   const [title, setTitle] = useState('');
   const [date, setDate] = useState(todayStr);
   const [time, setTime] = useState('15:30');
@@ -128,17 +130,15 @@ export const TabVazifalar: React.FC<{
   };
 
   const setDateOffset = (days: number) => {
-    const d = new Date();
-    d.setDate(d.getDate() + days);
-    setDate(formatDateYMD(d));
+    setDate(addDaysToYMD(todayStr, days));
   };
 
   // Today's active habits calculation
-  const todayDayOfWeek = new Date().getDay() === 0 ? 7 : new Date().getDay();
   const todayHabits = habits.filter(h => {
     if (h.isArchived) return false;
     if (h.frequency === 'daily') return true;
-    return h.daysOfWeek.includes(todayDayOfWeek);
+    if (h.frequency === 'weekly_target') return true;
+    return h.daysOfWeek?.includes(todayDayOfWeek);
   });
   const completedHabitsCount = todayHabits.filter(h => !!h.history[todayStr]?.completed).length;
 
@@ -420,9 +420,7 @@ export const TabVazifalar: React.FC<{
                         </button>
                         <button
                           onClick={() => {
-                            const d = new Date();
-                            d.setDate(d.getDate() + 1);
-                            postponeTask(task.id, formatDateYMD(d));
+                            postponeTask(task.id, addDaysToYMD(todayStr, 1));
                             setActiveMenuTaskId(null);
                           }}
                           className="w-full text-left px-3 py-2 text-slate-200 hover:bg-slate-700 flex items-center gap-2"

@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import { HabitFrequency, HabitType } from '../../types';
 import { formatDateYMD } from '../../utils/uzbekNlp';
+import { addDaysToYMD } from '../../utils/domainCalculations';
 import {
   CheckCircle2,
   Circle,
@@ -21,9 +22,17 @@ export const TabOdatlar: React.FC<{
   isAddModalOpen: boolean;
   setIsAddModalOpen: (open: boolean) => void;
 }> = ({ isAddModalOpen, setIsAddModalOpen }) => {
-  const { habits, goals, toggleHabitToday, logHabitQuantity, addHabit, updateHabit, deleteHabit } = useApp();
-
-  const todayStr = formatDateYMD(new Date());
+  const {
+    todayStr,
+    todayDayOfWeek,
+    habits,
+    goals,
+    toggleHabitToday,
+    logHabitQuantity,
+    addHabit,
+    updateHabit,
+    deleteHabit,
+  } = useApp();
 
   const [filterType, setFilterType] = useState<'all' | 'health' | 'general'>('all');
 
@@ -79,7 +88,7 @@ export const TabOdatlar: React.FC<{
       dosage: editHabitType === 'supplement_health' ? editDosage.trim() : undefined,
       timeSlot: editHabitType === 'supplement_health' ? editTimeSlot.trim() : undefined,
       frequency: editFrequency,
-      targetDaysPerWeek: editFrequency === 'weekly_target' ? editTargetDaysPerWeek : undefined,
+      targetDaysPerWeek: editFrequency === 'weekly_target' ? Math.max(1, Math.min(7, Math.round(Number(editTargetDaysPerWeek) || 3))) : undefined,
       daysOfWeek: editFrequency === 'specific_days' ? editSelectedDays : undefined,
       hasQuantity: editHasQuantity,
       targetQuantity: editHasQuantity ? Number(editTargetQuantity) || 1 : undefined,
@@ -135,7 +144,7 @@ export const TabOdatlar: React.FC<{
       dosage: habitType === 'supplement_health' && dosage.trim() ? dosage.trim() : undefined,
       timeSlot: habitType === 'supplement_health' && timeSlot.trim() ? timeSlot.trim() : undefined,
       frequency,
-      targetDaysPerWeek: frequency === 'weekly_target' ? targetDaysPerWeek : undefined,
+      targetDaysPerWeek: frequency === 'weekly_target' ? Math.max(1, Math.min(7, Math.round(Number(targetDaysPerWeek) || 3))) : undefined,
       daysOfWeek: finalDays,
       hasQuantity,
       targetQuantity: hasQuantity ? Number(targetQuantity) : undefined,
@@ -161,9 +170,7 @@ export const TabOdatlar: React.FC<{
   const getLast7Days = () => {
     const list: string[] = [];
     for (let i = 6; i >= 0; i--) {
-      const d = new Date();
-      d.setDate(d.getDate() - i);
-      list.push(formatDateYMD(d));
+      list.push(addDaysToYMD(todayStr, -i));
     }
     return list;
   };
@@ -300,7 +307,7 @@ export const TabOdatlar: React.FC<{
                         </h4>
                         <span className="flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20 shrink-0">
                           <Flame className="w-3.5 h-3.5 fill-amber-400" />
-                          {habit.streak} kun
+                          {habit.frequency === 'weekly_target' ? `${habit.streak} hafta` : `${habit.streak} kun`}
                         </span>
                       </div>
 
@@ -310,6 +317,12 @@ export const TabOdatlar: React.FC<{
                           <Repeat className="w-3 h-3 text-sky-400" />
                           {getFrequencyLabel(habit)}
                         </span>
+
+                        {habit.frequency === 'weekly_target' && (
+                          <span className="px-2 py-0.5 rounded-md bg-indigo-500/15 text-indigo-300 font-medium border border-indigo-500/25 flex items-center gap-1 text-[11px]">
+                            Bu hafta: {habit.weeklyCompletions ?? 0}/{Math.max(1, Math.min(7, habit.targetDaysPerWeek || 3))} kun
+                          </span>
+                        )}
 
                         {isHealth && habit.dosage && (
                           <span className="px-2 py-0.5 rounded-md bg-emerald-500/15 text-emerald-300 font-medium border border-emerald-500/25 flex items-center gap-1 text-[11px]">

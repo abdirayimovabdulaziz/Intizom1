@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import { ExpenseCategory, Currency } from '../../types';
 import { formatDateYMD, formatSom, formatMoney } from '../../utils/uzbekNlp';
+import { getTimeStringInTimezone } from '../../utils/domainCalculations';
 import {
   Wallet,
   Plus,
@@ -19,9 +20,8 @@ export const TabHarajatlar: React.FC<{
   isAddModalOpen: boolean;
   setIsAddModalOpen: (open: boolean) => void;
 }> = ({ isAddModalOpen, setIsAddModalOpen }) => {
-  const { expenses, addExpense, updateExpense, deleteExpense, settings } = useApp();
+  const { todayStr, timezone, expenses, addExpense, updateExpense, deleteExpense, settings } = useApp();
 
-  const todayStr = formatDateYMD(new Date());
   const currentMonthStr = todayStr.slice(0, 7); // YYYY-MM
 
   const [selectedCategory, setSelectedCategory] = useState<string>('hammasi');
@@ -101,8 +101,7 @@ export const TabHarajatlar: React.FC<{
     e.preventDefault();
     if (!title.trim() || !amount) return;
 
-    const now = new Date();
-    const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+    const timeStr = getTimeStringInTimezone(new Date(), timezone);
 
     addExpense({
       title: title.trim(),

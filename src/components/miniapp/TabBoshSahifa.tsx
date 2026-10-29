@@ -38,6 +38,8 @@ export const TabBoshSahifa: React.FC<{
   onOpenAddExpense: () => void;
 }> = ({ onOpenAddTask, onOpenAddHabit, onOpenAddExpense }) => {
   const {
+    todayStr,
+    todayDayOfWeek,
     tasks,
     habits,
     goals,
@@ -56,15 +58,12 @@ export const TabBoshSahifa: React.FC<{
   const [aiReviewSummary, setAiReviewSummary] = useState<string | null>(null);
   const [isExportedToast, setIsExportedToast] = useState(false);
 
-  const todayStr = formatDateYMD(new Date());
-
   // Today's tasks
   const todaysTasks = tasks.filter(t => t.date === todayStr && t.status !== 'cancelled' && !t.isArchived);
   const completedTasksToday = todaysTasks.filter(t => t.status === 'completed');
 
   // Today's habits (daily, weekly target, or specific days)
   const activeHabits = habits.filter(h => !h.isArchived);
-  const todayDayOfWeek = new Date().getDay() === 0 ? 7 : new Date().getDay();
   const todayHabits = activeHabits.filter(h => {
     if (h.frequency === 'daily') return true;
     if (h.frequency === 'weekly_target') return true;

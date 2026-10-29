@@ -37,6 +37,7 @@ export interface Habit {
   streak: number;
   bestStreak: number;
   currentQuantityToday?: number;
+  weeklyCompletions?: number;
   history: Record<string, { completed: boolean; quantity?: number; timestamp?: string }>;
   linkedGoalId?: string;
   notes?: string;
@@ -73,6 +74,8 @@ export interface GoalInternalHabit {
   targetFrequency: string; // e.g. "Haftada 3 kun", "Har kuni", "Nahorga"
   completedToday?: boolean;
   streak?: number;
+  bestStreak?: number;
+  history?: Record<string, { completed: boolean; timestamp?: string }>;
 }
 
 export interface GoalProgressLog {

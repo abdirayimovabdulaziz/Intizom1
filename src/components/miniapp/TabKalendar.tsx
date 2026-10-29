@@ -12,39 +12,41 @@ import {
 } from 'lucide-react';
 
 export const TabKalendar: React.FC = () => {
-  const { tasks, habits, toggleTaskComplete } = useApp();
+  const { todayStr, tasks, habits, toggleTaskComplete } = useApp();
 
-  const todayStr = formatDateYMD(new Date());
   const [selectedDate, setSelectedDate] = useState<string>(todayStr);
-  const [viewDate, setViewDate] = useState<Date>(new Date());
+  const [viewDate, setViewDate] = useState<Date>(() => {
+    const [y, m] = todayStr.split('-').map(Number);
+    return new Date(Date.UTC(y, m - 1, 1, 12, 0, 0));
+  });
 
   const monthNamesUz = [
     'Yanvar', 'Fevral', 'Mart', 'Aprel', 'May', 'Iyun',
     'Iyul', 'Avgust', 'Sentabr', 'Oktabr', 'Noyabr', 'Dekabr'
   ];
 
-  const currentYear = viewDate.getFullYear();
-  const currentMonth = viewDate.getMonth();
+  const currentYear = viewDate.getUTCFullYear();
+  const currentMonth = viewDate.getUTCMonth();
 
   const handlePrevMonth = () => {
-    setViewDate(new Date(currentYear, currentMonth - 1, 1));
+    setViewDate(new Date(Date.UTC(currentYear, currentMonth - 1, 1, 12, 0, 0)));
   };
 
   const handleNextMonth = () => {
-    setViewDate(new Date(currentYear, currentMonth + 1, 1));
+    setViewDate(new Date(Date.UTC(currentYear, currentMonth + 1, 1, 12, 0, 0)));
   };
 
   const handleGoToday = () => {
-    const today = new Date();
-    setViewDate(today);
-    setSelectedDate(formatDateYMD(today));
+    const [y, m] = todayStr.split('-').map(Number);
+    setViewDate(new Date(Date.UTC(y, m - 1, 1, 12, 0, 0)));
+    setSelectedDate(todayStr);
   };
 
-  // Calendar grid calculations
-  const firstDayOfMonth = new Date(currentYear, currentMonth, 1).getDay();
+  // Calendar grid calculations using pure UTC
+  const firstDayOfMonth = new Date(Date.UTC(currentYear, currentMonth, 1, 12, 0, 0)).getUTCDay();
   // Adjust so Monday is 0 and Sunday is 6
   const adjustedFirstDay = firstDayOfMonth === 0 ? 6 : firstDayOfMonth - 1;
-  const daysInMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
+  const daysInMonth = new Date(Date.UTC(currentYear, currentMonth + 1, 0, 12, 0, 0)).getUTCDate();
 
   const daysGrid: (string | null)[] = [];
   for (let i = 0; i < adjustedFirstDay; i++) {

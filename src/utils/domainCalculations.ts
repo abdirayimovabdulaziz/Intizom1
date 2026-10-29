@@ -22,6 +22,7 @@ export function getIanaTimezone(rawTimezone?: string): string {
 
 /**
  * Returns date formatted as YYYY-MM-DD in the given timezone (default: Asia/Tashkent)
+ * Uses Intl.formatToParts to guarantee exact YYYY-MM-DD representation across all locales/devices
  */
 export function getDateStringInTimezone(date: Date = new Date(), timezone: string = 'Asia/Tashkent'): string {
   const iana = getIanaTimezone(timezone);
@@ -32,6 +33,16 @@ export function getDateStringInTimezone(date: Date = new Date(), timezone: strin
       month: '2-digit',
       day: '2-digit',
     });
+    const parts = formatter.formatToParts(date);
+    let y = '', m = '', d = '';
+    for (const p of parts) {
+      if (p.type === 'year') y = p.value;
+      if (p.type === 'month') m = p.value;
+      if (p.type === 'day') d = p.value;
+    }
+    if (y && m && d) {
+      return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+    }
     return formatter.format(date);
   } catch {
     const year = date.getFullYear();
@@ -49,6 +60,14 @@ export function getDayOfWeekFromYMD(ymd: string): number {
   const dt = new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
   const day = dt.getUTCDay();
   return day === 0 ? 7 : day;
+}
+
+/**
+ * Returns current ISO day of week (1=Mon..7=Sun) in the user's timezone
+ */
+export function getDayOfWeekInTimezone(date: Date = new Date(), timezone: string = 'Asia/Tashkent'): number {
+  const ymd = getDateStringInTimezone(date, timezone);
+  return getDayOfWeekFromYMD(ymd);
 }
 
 /**
@@ -83,6 +102,17 @@ export function areUnitsCompatible(habitUnit?: string, goalUnit?: string): boole
   return hUnit === gUnit;
 }
 
+/**
+ * Validates and sanitizes scheduled days array to prevent infinite loops
+ */
+export function validateDaysOfWeek(daysOfWeek?: number[]): number[] {
+  if (!Array.isArray(daysOfWeek)) return [1, 2, 3, 4, 5, 6, 7];
+  const valid = daysOfWeek
+    .map(Number)
+    .filter(d => Number.isFinite(d) && d >= 1 && d <= 7);
+  return valid.length > 0 ? Array.from(new Set(valid)).sort() : [1, 2, 3, 4, 5, 6, 7];
+}
+
 export interface HabitStreakStats {
   streak: number;
   bestStreak: number;
@@ -94,6 +124,7 @@ export interface HabitStreakStats {
  * - daily: consecutive completed days. If today is incomplete, streak continues if yesterday was completed.
  * - specific_days: rest days (non-scheduled days) DO NOT break the streak.
  * - weekly_target: weekly progress is calculated separately (completed days in week vs target). Streak counts consecutive weeks target was met.
+ * - Future dates (> referenceDateStr) are never counted into current streaks or current week completions.
  */
 export function calculateHabitStreakAndStats(
   history: Record<string, { completed: boolean; quantity?: number }>,
@@ -103,12 +134,15 @@ export function calculateHabitStreakAndStats(
   referenceDateStr: string = getDateStringInTimezone(),
   existingBestStreak: number = 0
 ): HabitStreakStats {
+  const sanitizedDays = validateDaysOfWeek(daysOfWeek);
+  const validTargetDays = Math.min(7, Math.max(1, Math.round(targetDaysPerWeek || 3)));
+
   if (frequency === 'weekly_target') {
-    return calculateWeeklyTargetStats(history, targetDaysPerWeek, referenceDateStr, existingBestStreak);
+    return calculateWeeklyTargetStats(history, validTargetDays, referenceDateStr, existingBestStreak);
   }
 
   if (frequency === 'specific_days') {
-    return calculateSpecificDaysStreak(history, daysOfWeek, referenceDateStr, existingBestStreak);
+    return calculateSpecificDaysStreak(history, sanitizedDays, referenceDateStr, existingBestStreak);
   }
 
   // Frequency === 'daily'
@@ -143,9 +177,9 @@ function calculateDailyStreak(
     }
   }
 
-  // Calculate pure best streak across all history
+  // Calculate pure best streak across all history up to referenceDateStr
   const completedDates = Object.keys(history)
-    .filter(d => history[d]?.completed)
+    .filter(d => d <= referenceDateStr && history[d]?.completed)
     .sort();
 
   let maxStreak = 0;
@@ -169,7 +203,7 @@ function calculateDailyStreak(
     }
   }
 
-  const bestStreak = Math.max(existingBestStreak, maxStreak, currentStreak);
+  const bestStreak = Math.max(existingBestStreak || 0, maxStreak, currentStreak);
 
   return { streak: currentStreak, bestStreak };
 }
@@ -180,12 +214,14 @@ function calculateSpecificDaysStreak(
   referenceDateStr: string,
   existingBestStreak: number
 ): HabitStreakStats {
-  const activeScheduledDays = scheduledDays.length > 0 ? scheduledDays : [1, 2, 3, 4, 5, 6, 7];
+  const activeScheduledDays = validateDaysOfWeek(scheduledDays);
 
   const getPreviousScheduledDate = (fromDate: string): string => {
     let curr = addDaysToYMD(fromDate, -1);
-    while (!activeScheduledDays.includes(getDayOfWeekFromYMD(curr))) {
+    let attempts = 0;
+    while (!activeScheduledDays.includes(getDayOfWeekFromYMD(curr)) && attempts < 8) {
       curr = addDaysToYMD(curr, -1);
+      attempts++;
     }
     return curr;
   };
@@ -218,7 +254,33 @@ function calculateSpecificDaysStreak(
     }
   }
 
-  const bestStreak = Math.max(existingBestStreak, currentStreak);
+  // Calculate historical max streak across all scheduled days in history up to referenceDateStr
+  const completedScheduledDates = Object.keys(history)
+    .filter(d => d <= referenceDateStr && isScheduledDay(d) && history[d]?.completed)
+    .sort();
+
+  let maxHistorical = 0;
+  let running = 0;
+  let prevScheduledDate: string | null = null;
+
+  for (const d of completedScheduledDates) {
+    if (!prevScheduledDate) {
+      running = 1;
+    } else {
+      const expectedPrev = getPreviousScheduledDate(d);
+      if (prevScheduledDate === expectedPrev) {
+        running += 1;
+      } else {
+        running = 1;
+      }
+    }
+    prevScheduledDate = d;
+    if (running > maxHistorical) {
+      maxHistorical = running;
+    }
+  }
+
+  const bestStreak = Math.max(existingBestStreak || 0, maxHistorical, currentStreak);
   return { streak: currentStreak, bestStreak };
 }
 
@@ -228,50 +290,55 @@ function calculateWeeklyTargetStats(
   referenceDateStr: string,
   existingBestStreak: number
 ): HabitStreakStats {
+  const validTarget = Math.min(7, Math.max(1, Math.round(targetDaysPerWeek || 3)));
+
   // Find Monday of the current week containing referenceDateStr
   const currentDayOfWeek = getDayOfWeekFromYMD(referenceDateStr); // 1..7
   const currentMonday = addDaysToYMD(referenceDateStr, -(currentDayOfWeek - 1));
 
-  // Count completions in current week (Monday to Sunday)
+  // Count completions in current week (Monday to Sunday) up to referenceDateStr (exclude future dates)
   let currentWeekCompletions = 0;
   for (let i = 0; i < 7; i++) {
     const dayStr = addDaysToYMD(currentMonday, i);
-    if (history[dayStr]?.completed) {
+    if (dayStr <= referenceDateStr && history[dayStr]?.completed) {
       currentWeekCompletions += 1;
     }
   }
 
-  // Count consecutive weeks target was met
-  let weeklyStreak = 0;
-  let checkMonday = currentMonday;
+  // Group all historical completed dates by week Monday
+  const weekCompletionsMap: Record<string, Set<string>> = {};
+  for (const [d, record] of Object.entries(history)) {
+    if (record?.completed && d <= referenceDateStr) {
+      const dow = getDayOfWeekFromYMD(d);
+      const mon = addDaysToYMD(d, -(dow - 1));
+      if (!weekCompletionsMap[mon]) {
+        weekCompletionsMap[mon] = new Set();
+      }
+      weekCompletionsMap[mon].add(d);
+    }
+  }
 
-  const currentWeekMet = currentWeekCompletions >= targetDaysPerWeek;
+  // Calculate current weekly streak backwards
+  let weeklyStreak = 0;
+  let checkMonday: string | null = null;
+
+  const currentWeekMet = currentWeekCompletions >= validTarget;
   if (currentWeekMet) {
     weeklyStreak = 1;
     checkMonday = addDaysToYMD(currentMonday, -7);
   } else {
     // Current week not yet met; check if previous week was met
     const prevMonday = addDaysToYMD(currentMonday, -7);
-    let prevCompletions = 0;
-    for (let i = 0; i < 7; i++) {
-      const dayStr = addDaysToYMD(prevMonday, i);
-      if (history[dayStr]?.completed) prevCompletions += 1;
-    }
-    if (prevCompletions >= targetDaysPerWeek) {
+    const prevCount = weekCompletionsMap[prevMonday]?.size || 0;
+    if (prevCount >= validTarget) {
       weeklyStreak = 1;
       checkMonday = addDaysToYMD(prevMonday, -7);
-    } else {
-      checkMonday = null as any;
     }
   }
 
   while (checkMonday) {
-    let weekCompletions = 0;
-    for (let i = 0; i < 7; i++) {
-      const dayStr = addDaysToYMD(checkMonday, i);
-      if (history[dayStr]?.completed) weekCompletions += 1;
-    }
-    if (weekCompletions >= targetDaysPerWeek) {
+    const count = weekCompletionsMap[checkMonday]?.size || 0;
+    if (count >= validTarget) {
       weeklyStreak += 1;
       checkMonday = addDaysToYMD(checkMonday, -7);
     } else {
@@ -279,11 +346,96 @@ function calculateWeeklyTargetStats(
     }
   }
 
-  const bestStreak = Math.max(existingBestStreak, weeklyStreak);
+  // Calculate all-time max contiguous weekly streak across history
+  const allWeekMondays = Object.keys(weekCompletionsMap).sort();
+  let maxHistoricalWeeks = 0;
+  let runningWeeks = 0;
+  let prevMetMonday: string | null = null;
+
+  for (const mon of allWeekMondays) {
+    const count = weekCompletionsMap[mon].size;
+    if (count >= validTarget) {
+      if (!prevMetMonday) {
+        runningWeeks = 1;
+      } else {
+        const expectedNextMon = addDaysToYMD(prevMetMonday, 7);
+        if (mon === expectedNextMon) {
+          runningWeeks += 1;
+        } else {
+          runningWeeks = 1;
+        }
+      }
+      prevMetMonday = mon;
+      if (runningWeeks > maxHistoricalWeeks) {
+        maxHistoricalWeeks = runningWeeks;
+      }
+    }
+  }
+
+  const bestStreak = Math.max(existingBestStreak || 0, maxHistoricalWeeks, weeklyStreak);
   return {
     streak: weeklyStreak,
     bestStreak,
     weeklyCompletions: currentWeekCompletions,
+  };
+}
+
+/**
+ * Calculates streak and best streak for goal internal habits
+ * Based on date-anchored history without unsupported guesswork from free-text frequency.
+ */
+export function calculateInternalHabitStreak(
+  history: Record<string, { completed: boolean; timestamp?: string }> = {},
+  referenceDateStr: string = getDateStringInTimezone(),
+  existingBestStreak: number = 0
+): { streak: number; bestStreak: number } {
+  const isTodayDone = !!history[referenceDateStr]?.completed;
+  const yesterdayStr = addDaysToYMD(referenceDateStr, -1);
+  const isYesterdayDone = !!history[yesterdayStr]?.completed;
+
+  let currentStreak = 0;
+  let startCheck: string | null = null;
+  if (isTodayDone) {
+    currentStreak = 1;
+    startCheck = yesterdayStr;
+  } else if (isYesterdayDone) {
+    currentStreak = 1;
+    startCheck = addDaysToYMD(yesterdayStr, -1);
+  }
+
+  if (startCheck) {
+    let check = startCheck;
+    while (history[check]?.completed) {
+      currentStreak++;
+      check = addDaysToYMD(check, -1);
+    }
+  }
+
+  const completedDates = Object.keys(history)
+    .filter(d => d <= referenceDateStr && history[d]?.completed)
+    .sort();
+
+  let maxHistorical = 0;
+  let running = 0;
+  let prevDate: string | null = null;
+
+  for (const d of completedDates) {
+    if (!prevDate) {
+      running = 1;
+    } else {
+      if (d === addDaysToYMD(prevDate, 1)) {
+        running++;
+      } else {
+        running = 1;
+      }
+    }
+    prevDate = d;
+    if (running > maxHistorical) maxHistorical = running;
+  }
+
+  return {
+    streak: currentStreak,
+    bestStreak: Math.max(existingBestStreak || 0, maxHistorical, currentStreak),
   };
 }
 
@@ -328,6 +480,7 @@ export function applyHabitQuantityChange(
     currentQuantityToday: newQty,
     streak: streakStats.streak,
     bestStreak: streakStats.bestStreak,
+    weeklyCompletions: streakStats.weeklyCompletions,
   };
 
   let updatedGoal: Goal | undefined;
@@ -390,6 +543,7 @@ export function applyHabitToggle(
     currentQuantityToday: newQty,
     streak: streakStats.streak,
     bestStreak: streakStats.bestStreak,
+    weeklyCompletions: streakStats.weeklyCompletions,
   };
 
   let updatedGoal: Goal | undefined;
@@ -418,13 +572,14 @@ export function applyHabitToggle(
  * Rules:
  * - If minutesOrDate is a date string (e.g. YYYY-MM-DD): update date, keep time, status = 'postponed'
  * - If minutesOrDate is a number (minutes):
- *     1. Start from task.date (default to today if missing).
- *     2. Time baseline:
- *        - If task.time exists: use task.time (HH:mm)
+ *     1. Validates minutes is a finite number.
+ *     2. Start from task.date (default to today in timezone if missing).
+ *     3. Time baseline:
+ *        - If task.time exists: strict range validation for hours (0..23) and minutes (0..59)
  *        - If task.time does NOT exist:
- *            * If task.date === today: baseline is current time in timezone (now)
+ *            * If task.date === today: baseline is current time in target timezone (handling 00:00 midnight correctly)
  *            * If task.date !== today: baseline is 09:00
- *     3. Add minutes. If crosses midnight (e.g. 23:50 + 15m -> 00:05), date increments to next day.
+ *     4. Add minutes. If crosses midnight (e.g. 23:50 + 15m -> 00:05), date increments to next day.
  */
 export function calculatePostponedTask(
   task: Task,
@@ -440,28 +595,42 @@ export function calculatePostponedTask(
     };
   }
 
-  const minutesToAdd = minutesOrDate;
+  if (!Number.isFinite(minutesOrDate) || isNaN(minutesOrDate)) {
+    return { status: 'postponed' };
+  }
+
+  const minutesToAdd = Math.round(minutesOrDate);
   const todayStr = getDateStringInTimezone(now, timezone);
   const baseDate = task.date || todayStr;
 
   let baseHours = 9;
   let baseMinutes = 0;
 
-  if (task.time) {
-    const [h, m] = task.time.split(':').map(Number);
-    baseHours = isNaN(h) ? 9 : h;
-    baseMinutes = isNaN(m) ? 0 : m;
+  if (task.time && typeof task.time === 'string' && task.time.includes(':')) {
+    const parts = task.time.split(':');
+    const h = Number(parts[0]);
+    const m = Number(parts[1]);
+    baseHours = Number.isFinite(h) && h >= 0 && h < 24 ? h : 9;
+    baseMinutes = Number.isFinite(m) && m >= 0 && m < 60 ? m : 0;
   } else if (baseDate === todayStr) {
-    // Current time in specified timezone
+    // Current time in specified timezone using formatToParts
     const iana = getIanaTimezone(timezone);
-    const timeParts = new Intl.DateTimeFormat('en-GB', {
+    const formatter = new Intl.DateTimeFormat('en-GB', {
       timeZone: iana,
       hour: '2-digit',
       minute: '2-digit',
       hour12: false,
-    }).format(now).split(':').map(Number);
-    baseHours = timeParts[0] || now.getHours();
-    baseMinutes = timeParts[1] || now.getMinutes();
+    });
+    const parts = formatter.formatToParts(now);
+    let hVal: number | null = null;
+    let mVal: number | null = null;
+    for (const p of parts) {
+      if (p.type === 'hour') hVal = Number(p.value);
+      if (p.type === 'minute') mVal = Number(p.value);
+    }
+    // Strict finite range check so that 00:00 midnight is preserved and not replaced by fallback
+    baseHours = Number.isFinite(hVal) && hVal !== null && hVal >= 0 && hVal < 24 ? hVal : now.getHours();
+    baseMinutes = Number.isFinite(mVal) && mVal !== null && mVal >= 0 && mVal < 60 ? mVal : now.getMinutes();
   }
 
   const [year, month, day] = baseDate.split('-').map(Number);
@@ -482,4 +651,18 @@ export function calculatePostponedTask(
     status: 'postponed',
     postponedUntil: `${newDate} ${newTime}`,
   };
+}
+
+/**
+ * Returns formatted HH:MM in the specified timezone
+ */
+export function getTimeStringInTimezone(date: Date = new Date(), timezone: string = 'Asia/Tashkent'): string {
+  const iana = getIanaTimezone(timezone);
+  const formatter = new Intl.DateTimeFormat('en-GB', {
+    timeZone: iana,
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+  return formatter.format(date);
 }

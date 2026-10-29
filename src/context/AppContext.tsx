@@ -16,16 +16,24 @@ import {
 import { formatDateYMD, formatUzbekDateLabel, formatSom, formatMoney, parseUzbekIntent } from '../utils/uzbekNlp';
 import { triggerHaptic } from '../utils/telegram';
 import {
-  applyHabitQuantityChange,
-  applyHabitToggle,
-  calculateHabitStreakAndStats,
   calculatePostponedTask,
   generateEntityId,
   getDateStringInTimezone,
+  getDayOfWeekInTimezone,
   getIanaTimezone,
 } from '../utils/domainCalculations';
+import {
+  domainReducer,
+  DomainState,
+  DomainAction,
+  normalizeHabitForDate,
+  normalizeGoalInternalHabitsForDate,
+} from './domainReducer';
 
 interface AppContextType {
+  todayStr: string;
+  timezone: string;
+  todayDayOfWeek: number;
   tasks: Task[];
   habits: Habit[];
   goals: Goal[];
@@ -85,428 +93,6 @@ const STORAGE_KEY_GOALS = 'kunlik_yordamchi_goals_clean_v1';
 const STORAGE_KEY_EXPENSES = 'kunlik_yordamchi_expenses_clean_v1';
 const STORAGE_KEY_MSGS = 'kunlik_yordamchi_messages_clean_v1';
 const STORAGE_KEY_SETTINGS = 'kunlik_yordamchi_settings_clean_v1';
-
-interface DomainState {
-  habits: Habit[];
-  goals: Goal[];
-}
-
-type DomainAction =
-  | {
-      type: 'LOG_HABIT_QUANTITY';
-      habitId: string;
-      amount: number;
-      dateStr: string;
-      timestamp: string;
-    }
-  | {
-      type: 'TOGGLE_HABIT_TODAY';
-      habitId: string;
-      dateStr: string;
-      timestamp: string;
-    }
-  | {
-      type: 'SET_HABITS';
-      habits: Habit[] | ((prev: Habit[]) => Habit[]);
-    }
-  | {
-      type: 'ADD_HABIT';
-      habit: Habit;
-    }
-  | {
-      type: 'UPDATE_HABIT';
-      id: string;
-      updates: Partial<Habit>;
-      dateStr: string;
-    }
-  | {
-      type: 'DELETE_HABIT';
-      id: string;
-      permanent: boolean;
-    }
-  | {
-      type: 'RESTORE_HABIT';
-      id: string;
-    }
-  | {
-      type: 'SET_GOALS';
-      goals: Goal[] | ((prev: Goal[]) => Goal[]);
-    }
-  | {
-      type: 'ADD_GOAL';
-      goal: Goal;
-    }
-  | {
-      type: 'UPDATE_GOAL';
-      id: string;
-      updates: Partial<Goal>;
-    }
-  | {
-      type: 'UPDATE_GOAL_PROGRESS';
-      id: string;
-      deltaAmount: number;
-    }
-  | {
-      type: 'LOG_GOAL_PROGRESS';
-      goalId: string;
-      amount: number;
-      date: string;
-      time: string;
-      logId: string;
-      note?: string;
-    }
-  | {
-      type: 'DELETE_GOAL_PROGRESS_LOG';
-      goalId: string;
-      logId: string;
-    }
-  | {
-      type: 'ADD_GOAL_INTERNAL_HABIT';
-      goalId: string;
-      internalHabit: GoalInternalHabit;
-    }
-  | {
-      type: 'TOGGLE_GOAL_INTERNAL_HABIT';
-      goalId: string;
-      habitId: string;
-    }
-  | {
-      type: 'DELETE_GOAL_INTERNAL_HABIT';
-      goalId: string;
-      habitId: string;
-    }
-  | {
-      type: 'DELETE_GOAL';
-      id: string;
-      permanent: boolean;
-    }
-  | {
-      type: 'RESTORE_GOAL';
-      id: string;
-    }
-  | {
-      type: 'REFRESH_HABITS_DAILY_STATUS';
-      dateStr: string;
-    }
-  | {
-      type: 'RESET_DOMAIN';
-      habits: Habit[];
-      goals: Goal[];
-    };
-
-function domainReducer(state: DomainState, action: DomainAction): DomainState {
-  switch (action.type) {
-    case 'LOG_HABIT_QUANTITY': {
-      const targetHabit = state.habits.find(h => h.id === action.habitId);
-      if (!targetHabit) return state;
-
-      const linkedGoal = targetHabit.linkedGoalId
-        ? state.goals.find(g => g.id === targetHabit.linkedGoalId)
-        : undefined;
-
-      const { updatedHabit, updatedGoal } = applyHabitQuantityChange(
-        targetHabit,
-        linkedGoal,
-        action.amount,
-        action.dateStr,
-        action.timestamp
-      );
-
-      return {
-        ...state,
-        habits: state.habits.map(h => (h.id === action.habitId ? updatedHabit : h)),
-        goals: updatedGoal
-          ? state.goals.map(g => (g.id === updatedGoal.id ? updatedGoal : g))
-          : state.goals,
-      };
-    }
-
-    case 'TOGGLE_HABIT_TODAY': {
-      const targetHabit = state.habits.find(h => h.id === action.habitId);
-      if (!targetHabit) return state;
-
-      const linkedGoal = targetHabit.linkedGoalId
-        ? state.goals.find(g => g.id === targetHabit.linkedGoalId)
-        : undefined;
-
-      const { updatedHabit, updatedGoal } = applyHabitToggle(
-        targetHabit,
-        linkedGoal,
-        action.dateStr,
-        action.timestamp
-      );
-
-      return {
-        ...state,
-        habits: state.habits.map(h => (h.id === action.habitId ? updatedHabit : h)),
-        goals: updatedGoal
-          ? state.goals.map(g => (g.id === updatedGoal.id ? updatedGoal : g))
-          : state.goals,
-      };
-    }
-
-    case 'SET_HABITS': {
-      const nextHabits = typeof action.habits === 'function' ? action.habits(state.habits) : action.habits;
-      return { ...state, habits: nextHabits };
-    }
-
-    case 'ADD_HABIT': {
-      return {
-        ...state,
-        habits: [action.habit, ...state.habits],
-      };
-    }
-
-    case 'UPDATE_HABIT': {
-      return {
-        ...state,
-        habits: state.habits.map(h => {
-          if (h.id === action.id) {
-            const merged = { ...h, ...action.updates };
-            const stats = calculateHabitStreakAndStats(
-              merged.history || {},
-              merged.frequency,
-              merged.daysOfWeek,
-              merged.targetDaysPerWeek,
-              action.dateStr,
-              merged.bestStreak || 0
-            );
-            return {
-              ...merged,
-              streak: stats.streak,
-              bestStreak: stats.bestStreak,
-              currentQuantityToday: merged.history?.[action.dateStr]?.quantity ?? 0,
-            };
-          }
-          return h;
-        }),
-      };
-    }
-
-    case 'DELETE_HABIT': {
-      return {
-        ...state,
-        habits: action.permanent
-          ? state.habits.filter(h => h.id !== action.id)
-          : state.habits.map(h => (h.id === action.id ? { ...h, isArchived: true } : h)),
-      };
-    }
-
-    case 'RESTORE_HABIT': {
-      return {
-        ...state,
-        habits: state.habits.map(h => (h.id === action.id ? { ...h, isArchived: false } : h)),
-      };
-    }
-
-    case 'SET_GOALS': {
-      const nextGoals = typeof action.goals === 'function' ? action.goals(state.goals) : action.goals;
-      return { ...state, goals: nextGoals };
-    }
-
-    case 'ADD_GOAL': {
-      return {
-        ...state,
-        goals: [action.goal, ...state.goals],
-      };
-    }
-
-    case 'UPDATE_GOAL': {
-      return {
-        ...state,
-        goals: state.goals.map(g => (g.id === action.id ? { ...g, ...action.updates } : g)),
-      };
-    }
-
-    case 'UPDATE_GOAL_PROGRESS': {
-      return {
-        ...state,
-        goals: state.goals.map(g => {
-          if (g.id === action.id) {
-            const isDecrease = g.goalType === 'decrease';
-            const newVal = isDecrease
-              ? Math.max(0, g.currentValue - action.deltaAmount)
-              : Math.max(0, g.currentValue + action.deltaAmount);
-            const achieved = isDecrease ? newVal <= g.targetValue : newVal >= g.targetValue;
-            return {
-              ...g,
-              currentValue: newVal,
-              status: achieved ? 'achieved' : 'active',
-            };
-          }
-          return g;
-        }),
-      };
-    }
-
-    case 'LOG_GOAL_PROGRESS': {
-      return {
-        ...state,
-        goals: state.goals.map(g => {
-          if (g.id === action.goalId) {
-            const isDecrease = g.goalType === 'decrease';
-            const newVal = isDecrease
-              ? Math.max(0, g.currentValue - action.amount)
-              : Math.max(0, g.currentValue + action.amount);
-
-            const achieved = isDecrease ? newVal <= g.targetValue : newVal >= g.targetValue;
-            const remaining = isDecrease
-              ? Math.max(0, newVal - g.targetValue)
-              : Math.max(0, g.targetValue - newVal);
-
-            const newLog: GoalProgressLog = {
-              id: action.logId,
-              date: action.date,
-              time: action.time,
-              amount: action.amount,
-              note: action.note || undefined,
-              resultingCurrent: newVal,
-              resultingRemaining: remaining,
-            };
-
-            return {
-              ...g,
-              currentValue: newVal,
-              status: achieved ? 'achieved' : 'active',
-              progressLogs: [newLog, ...(g.progressLogs || [])],
-            };
-          }
-          return g;
-        }),
-      };
-    }
-
-    case 'DELETE_GOAL_PROGRESS_LOG': {
-      return {
-        ...state,
-        goals: state.goals.map(g => {
-          if (g.id === action.goalId && g.progressLogs) {
-            const targetLog = g.progressLogs.find(l => l.id === action.logId);
-            if (!targetLog) return g;
-
-            const isDecrease = g.goalType === 'decrease';
-            const revertedVal = isDecrease
-              ? g.currentValue + targetLog.amount
-              : Math.max(0, g.currentValue - targetLog.amount);
-
-            const achieved = isDecrease ? revertedVal <= g.targetValue : revertedVal >= g.targetValue;
-
-            return {
-              ...g,
-              currentValue: revertedVal,
-              status: achieved ? 'achieved' : 'active',
-              progressLogs: g.progressLogs.filter(l => l.id !== action.logId),
-            };
-          }
-          return g;
-        }),
-      };
-    }
-
-    case 'ADD_GOAL_INTERNAL_HABIT': {
-      return {
-        ...state,
-        goals: state.goals.map(g => {
-          if (g.id === action.goalId) {
-            return {
-              ...g,
-              internalHabits: [...(g.internalHabits || []), action.internalHabit],
-            };
-          }
-          return g;
-        }),
-      };
-    }
-
-    case 'TOGGLE_GOAL_INTERNAL_HABIT': {
-      return {
-        ...state,
-        goals: state.goals.map(g => {
-          if (g.id === action.goalId && g.internalHabits) {
-            return {
-              ...g,
-              internalHabits: g.internalHabits.map(h => {
-                if (h.id === action.habitId) {
-                  const nextState = !h.completedToday;
-                  return {
-                    ...h,
-                    completedToday: nextState,
-                    streak: nextState ? (h.streak || 0) + 1 : Math.max(0, (h.streak || 0) - 1),
-                  };
-                }
-                return h;
-              }),
-            };
-          }
-          return g;
-        }),
-      };
-    }
-
-    case 'DELETE_GOAL_INTERNAL_HABIT': {
-      return {
-        ...state,
-        goals: state.goals.map(g => {
-          if (g.id === action.goalId && g.internalHabits) {
-            return {
-              ...g,
-              internalHabits: g.internalHabits.filter(h => h.id !== action.habitId),
-            };
-          }
-          return g;
-        }),
-      };
-    }
-
-    case 'DELETE_GOAL': {
-      return {
-        ...state,
-        goals: action.permanent
-          ? state.goals.filter(g => g.id !== action.id)
-          : state.goals.map(g => (g.id === action.id ? { ...g, isArchived: true } : g)),
-      };
-    }
-
-    case 'RESTORE_GOAL': {
-      return {
-        ...state,
-        goals: state.goals.map(g => (g.id === action.id ? { ...g, isArchived: false } : g)),
-      };
-    }
-
-    case 'REFRESH_HABITS_DAILY_STATUS': {
-      return {
-        ...state,
-        habits: state.habits.map(h => {
-          const stats = calculateHabitStreakAndStats(
-            h.history || {},
-            h.frequency,
-            h.daysOfWeek,
-            h.targetDaysPerWeek,
-            action.dateStr,
-            h.bestStreak || 0
-          );
-          return {
-            ...h,
-            currentQuantityToday: h.history?.[action.dateStr]?.quantity ?? 0,
-            streak: stats.streak,
-            bestStreak: stats.bestStreak,
-          };
-        }),
-      };
-    }
-
-    case 'RESET_DOMAIN': {
-      return {
-        habits: action.habits,
-        goals: action.goals,
-      };
-    }
-
-    default:
-      return state;
-  }
-}
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const defaultTasks: Task[] = [];
@@ -575,22 +161,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           const saved = localStorage.getItem(STORAGE_KEY_HABITS);
           if (saved) {
             const parsed: Habit[] = JSON.parse(saved);
-            return parsed.map(h => {
-              const stats = calculateHabitStreakAndStats(
-                h.history || {},
-                h.frequency,
-                h.daysOfWeek,
-                h.targetDaysPerWeek,
-                today,
-                h.bestStreak || 0
-              );
-              return {
-                ...h,
-                currentQuantityToday: h.history?.[today]?.quantity ?? 0,
-                streak: stats.streak,
-                bestStreak: stats.bestStreak,
-              };
-            });
+            return parsed.map(h => normalizeHabitForDate(h, today));
           }
           return defaultHabits;
         } catch {
@@ -601,7 +172,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const savedGoals: Goal[] = (() => {
         try {
           const saved = localStorage.getItem(STORAGE_KEY_GOALS);
-          return saved ? JSON.parse(saved) : defaultGoals;
+          if (saved) {
+            const parsed: Goal[] = JSON.parse(saved);
+            return parsed.map(g => normalizeGoalInternalHabitsForDate(g, today));
+          }
+          return defaultGoals;
         } catch {
           return defaultGoals;
         }
@@ -874,13 +449,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       targetFrequency,
       completedToday: false,
       streak: 0,
+      bestStreak: 0,
+      history: {},
     };
     domainDispatch({ type: 'ADD_GOAL_INTERNAL_HABIT', goalId, internalHabit: newHabit });
     triggerHaptic('light');
   };
 
   const toggleGoalInternalHabit = (goalId: string, habitId: string) => {
-    domainDispatch({ type: 'TOGGLE_GOAL_INTERNAL_HABIT', goalId, habitId });
+    domainDispatch({
+      type: 'TOGGLE_GOAL_INTERNAL_HABIT',
+      goalId,
+      habitId,
+      dateStr: activeTodayStr,
+      timestamp: new Date().toISOString(),
+    });
     triggerHaptic('selection');
   };
 
@@ -1893,9 +1476,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setSettings(prev => ({ ...prev, ...newSettings }));
   };
 
+  const todayDayOfWeek = getDayOfWeekInTimezone(new Date(), settings.timezone);
+
   return (
     <AppContext.Provider
       value={{
+        todayStr: activeTodayStr,
+        timezone: settings.timezone,
+        todayDayOfWeek,
         tasks,
         habits,
         goals,

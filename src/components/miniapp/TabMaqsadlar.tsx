@@ -51,6 +51,7 @@ export const TabMaqsadlar: React.FC<{
     addGoalInternalHabit,
     toggleGoalInternalHabit,
     deleteGoalInternalHabit,
+    todayStr,
   } = useApp();
 
   const [subTab, setSubTab] = useState<'maqsadlar' | 'odatlar'>(defaultSubTab);
@@ -69,7 +70,7 @@ export const TabMaqsadlar: React.FC<{
   const [startValue, setStartValue] = useState<number>(90);
   const [targetValue, setTargetValue] = useState<number>(300);
   const [unit, setUnit] = useState('bet');
-  const [deadline, setDeadline] = useState(`${formatDateYMD(new Date()).slice(0, 7)}-30`);
+  const [deadline, setDeadline] = useState(`${todayStr.slice(0, 7)}-30`);
   const [notes, setNotes] = useState('');
 
   // Edit Goal Form State

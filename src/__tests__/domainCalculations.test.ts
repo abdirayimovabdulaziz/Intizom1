@@ -2,13 +2,20 @@ import {
   applyHabitQuantityChange,
   applyHabitToggle,
   calculateHabitStreakAndStats,
+  calculateInternalHabitStreak,
   calculatePostponedTask,
   generateEntityId,
   areUnitsCompatible,
   getDateStringInTimezone,
   addDaysToYMD,
 } from '../utils/domainCalculations';
-import { Habit, Goal, Task } from '../types';
+import { Habit, Goal, Task, GoalInternalHabit } from '../types';
+import {
+  domainReducer,
+  DomainState,
+  normalizeHabitForDate,
+  normalizeGoalInternalHabitsForDate,
+} from '../context/domainReducer';
 
 let passed = 0;
 let failed = 0;
@@ -366,6 +373,294 @@ console.log('=== KUNLIK YORDAMCHI DOMEN TESTLARI ===\n');
     JSON.stringify(resA.updatedHabit) === JSON.stringify(resB.updatedHabit),
     'i) Sof funksiya/reducer bir xil kirish uchun bir xil natija beradi (React Strict Mode xavfsiz)'
   );
+}
+
+// Test J: Maqsad ichidagi ichki odatlar (history, streak, legacy migratsiya)
+{
+  const internalHabit: GoalInternalHabit = {
+    id: 'ghabit-1',
+    title: 'Ertalabki yugurish',
+    targetFrequency: 'Har kuni 20 daqiqa',
+    completedToday: false,
+    streak: 0,
+    bestStreak: 0,
+    history: {
+      '2026-10-27': { completed: true },
+      '2026-10-28': { completed: true },
+    },
+  };
+
+  // 1. Streak bugun (2026-10-29) hali bajarilmagan holatda 2 bo'lishi kerak (kechagi 2 kun uzluksiz)
+  const statsPre = calculateInternalHabitStreak(internalHabit.history, '2026-10-29', 0);
+  assert(statsPre.streak === 2, 'j1) Ichki odat bugun belgilanmagan bo\'lsa ham kechagidan kelgan streak 2', `Streak: ${statsPre.streak}`);
+
+  // 2. Bugungi kun (2026-10-29) bajarilganda streak 3 bo'lishi kerak
+  const historyWithToday = {
+    ...internalHabit.history,
+    '2026-10-29': { completed: true, timestamp: '2026-10-29T08:00:00Z' },
+  };
+  const statsPost = calculateInternalHabitStreak(historyWithToday, '2026-10-29', statsPre.bestStreak);
+  assert(statsPost.streak === 3, 'j2) Ichki odat bugun bajarilganda streak 3 bo\'ladi', `Streak: ${statsPost.streak}`);
+  assert(statsPost.bestStreak === 3, 'j2) bestStreak 3 ga yangilanadi');
+
+  // 3. Eski dateless legacy ichki odat migratsiyasi: bugunga uydirma completion YOZILMASIN
+  const legacyInternalHabit: GoalInternalHabit = {
+    id: 'ghabit-legacy',
+    title: 'Eski ichki odat',
+    targetFrequency: 'Kunlik',
+    completedToday: true, // eski boolean
+    streak: 5,
+  };
+  const legacyGoal: Goal = {
+    id: 'goal-legacy',
+    title: 'Eski maqsad',
+    category: 'maqsad',
+    deadline: '2026-12-31',
+    currentValue: 0,
+    targetValue: 100,
+    unit: 'marta',
+    status: 'active',
+    linkedHabitIds: [],
+    internalHabits: [legacyInternalHabit],
+  };
+
+  const normalizedGoal = normalizeGoalInternalHabitsForDate(legacyGoal, '2026-10-29');
+  const normalizedHabit = normalizedGoal.internalHabits![0];
+  assert(
+    normalizedHabit.completedToday === false,
+    'j3) Eski dateless odat uchun bugunga uydirma bajarilish belgilanmasin (completedToday=false)',
+    `completedToday: ${normalizedHabit.completedToday}`
+  );
+  assert(
+    normalizedHabit.streak === 0,
+    'j3) Tarixsiz eski odatda bugungi sana uchun streak 0 ga aylanadi (uydirma streak hisoblanmaydi)',
+    `Streak: ${normalizedHabit.streak}`
+  );
+}
+
+// Test K: calculatePostponedTask da 00:00 nol qiymat va xavfsiz kechiktirish
+{
+  // 1. Task vaqti aynan 00:00 bo'lgan holat (00 falsy deb 9:00 ga aylanib ketmasligi kerak!)
+  const midnightTask: Task = {
+    id: 'task-midnight',
+    title: 'Tungi skript',
+    category: 'vazifa',
+    date: '2026-10-29',
+    time: '00:00',
+    status: 'pending',
+    priority: 'low',
+    source: 'miniapp',
+  };
+  const postponedMidnight = calculatePostponedTask(midnightTask, 15, new Date('2026-10-28T19:00:00Z'), 'Asia/Tashkent');
+  assert(
+    postponedMidnight.date === '2026-10-29' && postponedMidnight.time === '00:15',
+    'k1) 00:00 vaqtidagi vazifa +15 min surilganda 00:15 bo\'ladi (00 saqlanadi)',
+    `Natija: ${postponedMidnight.date} ${postponedMidnight.time}`
+  );
+
+  // 2. Qurilma UTC da (19:00 UTC = 00:00 Tashkent) bo'lganda va vazifaning soati bo'lmaganda
+  const untimedTask: Task = {
+    ...midnightTask,
+    time: undefined,
+  };
+  // 2026-10-28 19:10 UTC -> 2026-10-29 00:10 Tashkent
+  const nowUtc = new Date('2026-10-28T19:10:00Z');
+  const postponedInTashkent = calculatePostponedTask(untimedTask, 20, nowUtc, 'Asia/Tashkent');
+  assert(
+    postponedInTashkent.date === '2026-10-29' && postponedInTashkent.time === '00:30',
+    'k2) Qurilma UTC da bo\'lsa ham Asia/Tashkent dagi 00:10 vaqtidan +20m = 00:30 bo\'ladi',
+    `Natija: ${postponedInTashkent.date} ${postponedInTashkent.time}`
+  );
+
+  // 3. NaN yoki Infinity kechiktirish qiymati dasturni buzmaydi
+  const postponedNan = calculatePostponedTask(midnightTask, NaN, nowUtc, 'Asia/Tashkent');
+  assert(postponedNan.status === 'postponed', 'k3) NaN kechiktirish xavfsiz qaytadi');
+  const postponedInf = calculatePostponedTask(midnightTask, Infinity, nowUtc, 'Asia/Tashkent');
+  assert(postponedInf.status === 'postponed', 'k3) Infinity kechiktirish xavfsiz qaytadi');
+}
+
+// Test L: bestStreak ni butun tarixdan izlash va kelajak sanalar himoyasi
+{
+  // 1. Muayyan kunlar (specific_days: Dushanba=1, Chorshanba=3, Juma=5)
+  // Eski tarixdagi muvaffaqiyatli ketma-ketlik: 6 ta rejalashtirilgan kun ketma-ket bajarilgan,
+  // lekin oxirgi paytlarda tashlab ketilgan (joriy streak = 0)
+  const historyWithPastBest: Record<string, { completed: boolean }> = {
+    '2026-09-07': { completed: true }, // Dush
+    '2026-09-09': { completed: true }, // Chor
+    '2026-09-11': { completed: true }, // Juma
+    '2026-09-14': { completed: true }, // Dush
+    '2026-09-16': { completed: true }, // Chor
+    '2026-09-18': { completed: true }, // Juma  -> 6 ta sessiya ketma-ket
+    // Keyin 1 oy o'tkazib yuborilgan
+    '2026-10-28': { completed: false }, // Bugun streak 0
+  };
+
+  const specificStats = calculateHabitStreakAndStats(
+    historyWithPastBest,
+    'specific_days',
+    [1, 3, 5],
+    undefined,
+    '2026-10-29',
+    0
+  );
+  assert(specificStats.streak === 0, 'l1) Bugun streak 0 bo\'lishi kerak');
+  assert(
+    specificStats.bestStreak === 6,
+    'l1) Tarixdagi 6 ta ketma-ketlik bugungi streak 0 bo\'lsa ham topilishi kerak',
+    `bestStreak: ${specificStats.bestStreak}`
+  );
+
+  // 2. Haftalik target odat (weekly_target: haftada 2 kun)
+  // Eski 3 hafta davomida target bajarilgan, joriy haftada esa hali bajarilmagan
+  const weeklyHistory: Record<string, { completed: boolean }> = {
+    // 1-hafta (2026-10-05 haftasi): 2 kun
+    '2026-10-06': { completed: true },
+    '2026-10-08': { completed: true },
+    // 2-hafta (2026-10-12 haftasi): 2 kun
+    '2026-10-13': { completed: true },
+    '2026-10-15': { completed: true },
+    // 3-hafta (2026-10-19 haftasi): 2 kun
+    '2026-10-20': { completed: true },
+    '2026-10-22': { completed: true },
+    // Kelajakdagi sana (bugun 2026-10-29, 2026-10-31 esa kelajak):
+    // Kelajak completion joriy haftaga hisoblanmasligi kerak
+    '2026-10-31': { completed: true },
+  };
+
+  const weeklyStats = calculateHabitStreakAndStats(
+    weeklyHistory,
+    'weekly_target',
+    undefined,
+    2,
+    '2026-10-29',
+    0
+  );
+  assert(
+    weeklyStats.bestStreak === 3,
+    'l2) Haftalik odatda tarixiy 3 hafta ketma-ketlik topildi',
+    `bestStreak: ${weeklyStats.bestStreak}`
+  );
+  assert(
+    weeklyStats.weeklyCompletions === 0,
+    'l2) Kelajakdagi sana (2026-10-31) bugungi kunda joriy haftaga hisoblanmasligi kerak',
+    `weeklyCompletions: ${weeklyStats.weeklyCompletions}`
+  );
+}
+
+// Test M: domainReducer mustaqil sof funksiyasini to'g'ridan-to'g'ri tekshirish
+{
+  const initialState: DomainState = {
+    habits: [
+      {
+        id: 'h-reducer-1',
+        title: 'Kitob',
+        category: 'odat',
+        frequency: 'daily',
+        daysOfWeek: [1, 2, 3, 4, 5, 6, 7],
+        hasQuantity: true,
+        targetQuantity: 10,
+        unit: 'bet',
+        streak: 0,
+        bestStreak: 0,
+        history: {},
+        linkedGoalId: 'g-reducer-1',
+      },
+    ],
+    goals: [
+      {
+        id: 'g-reducer-1',
+        title: 'Kitob maqsadi',
+        category: 'maqsad',
+        deadline: '2026-12-31',
+        startValue: 0,
+        currentValue: 20,
+        targetValue: 100,
+        unit: 'bet',
+        goalType: 'reach',
+        status: 'active',
+        linkedHabitIds: ['h-reducer-1'],
+        internalHabits: [
+          {
+            id: 'ih-1',
+            title: '1 bob o\'qish',
+            targetFrequency: 'kunlik',
+            completedToday: false,
+            streak: 0,
+            bestStreak: 0,
+            history: {},
+          },
+        ],
+      },
+    ],
+  };
+
+  // 1. LOG_HABIT_QUANTITY
+  const stateAfterLog = domainReducer(initialState, {
+    type: 'LOG_HABIT_QUANTITY',
+    habitId: 'h-reducer-1',
+    amount: 5,
+    dateStr: '2026-10-29',
+    timestamp: '2026-10-29T10:00:00Z',
+  });
+  assert(
+    stateAfterLog.habits[0].currentQuantityToday === 5,
+    'm1) Reducer orqali miqdor qo\'shilganda habit 5 bo\'ladi'
+  );
+  assert(
+    stateAfterLog.goals[0].currentValue === 25,
+    'm1) Reducer orqali bog\'langan maqsad ham atomik 20 + 5 = 25 bo\'ladi'
+  );
+
+  // 2. TOGGLE_GOAL_INTERNAL_HABIT
+  const stateAfterIhToggle = domainReducer(stateAfterLog, {
+    type: 'TOGGLE_GOAL_INTERNAL_HABIT',
+    goalId: 'g-reducer-1',
+    habitId: 'ih-1',
+    dateStr: '2026-10-29',
+    timestamp: '2026-10-29T10:05:00Z',
+  });
+  const ih = stateAfterIhToggle.goals[0].internalHabits![0];
+  assert(ih.completedToday === true, 'm2) Ichki odat TOGGLE_GOAL_INTERNAL_HABIT orqali belgilanadi');
+  assert(ih.streak === 1, 'm2) Ichki odat streak 1 bo\'ladi');
+  assert(ih.history!['2026-10-29'].completed === true, 'm2) Tarixda sana bilan saqlanadi');
+
+  // 3. REFRESH_HABITS_DAILY_STATUS kun almashganda
+  const stateNextDay = domainReducer(stateAfterIhToggle, {
+    type: 'REFRESH_HABITS_DAILY_STATUS',
+    dateStr: '2026-10-30',
+  });
+  assert(
+    stateNextDay.habits[0].currentQuantityToday === 0,
+    'm3) Yangi kunda odat miqdori 0 ga yangilanadi'
+  );
+  assert(
+    stateNextDay.goals[0].internalHabits![0].completedToday === false,
+    'm3) Yangi kunda ichki odat completedToday false bo\'ladi'
+  );
+  assert(
+    stateNextDay.goals[0].internalHabits![0].streak === 1,
+    'm3) Kechagi kun bajarilgani uchun ichki odat streak 1 saqlanadi'
+  );
+}
+
+// Test N: normalizeHabitForDate va normalizeGoalInternalHabitsForDate
+{
+  const habitToNormalize: Habit = {
+    id: 'h-norm',
+    title: 'Sport',
+    category: 'odat',
+    frequency: 'daily',
+    daysOfWeek: [1, 2, 3, 4, 5, 6, 7],
+    hasQuantity: false,
+    streak: 0,
+    bestStreak: 0,
+    history: {
+      '2026-10-28': { completed: true, quantity: 1 },
+    },
+  };
+  const normalized = normalizeHabitForDate(habitToNormalize, '2026-10-29');
+  assert(normalized.streak === 1, 'n1) normalizeHabitForDate kechagi bajarilish asosida streak=1 hisoblaydi');
+  assert(normalized.currentQuantityToday === 0, 'n1) Bugungi miqdor 0');
 }
 
 console.log(`\n========================================`);
