@@ -550,7 +550,7 @@ export const TabMaqsadlar: React.FC<{
                                 {ih.title}
                               </span>
                               <span className="text-[10px] text-slate-400">
-                                {ih.targetFrequency} • 🔥 {ih.streak || 0} kun
+                                {ih.targetFrequency ? `${ih.targetFrequency} • ` : ''}Jami {ih.totalCompletions ?? Object.keys(ih.history || {}).filter(d => ih.history?.[d]?.completed && d <= todayStr).length} kun bajarilgan
                               </span>
                             </div>
                           </button>

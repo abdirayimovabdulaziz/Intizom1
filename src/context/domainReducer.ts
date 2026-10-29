@@ -157,6 +157,7 @@ export function normalizeGoalInternalHabitsForDate(goal: Goal, dateStr: string):
         history,
         streak: stats.streak,
         bestStreak: stats.bestStreak,
+        totalCompletions: stats.totalCompletions,
       };
     }),
   };
@@ -406,6 +407,7 @@ export function domainReducer(state: DomainState, action: DomainAction): DomainS
                     history: updatedHistory,
                     streak: stats.streak,
                     bestStreak: stats.bestStreak,
+                    totalCompletions: stats.totalCompletions,
                   };
                 }
                 return h;

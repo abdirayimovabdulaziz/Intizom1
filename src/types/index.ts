@@ -75,6 +75,7 @@ export interface GoalInternalHabit {
   completedToday?: boolean;
   streak?: number;
   bestStreak?: number;
+  totalCompletions?: number;
   history?: Record<string, { completed: boolean; timestamp?: string }>;
 }
 

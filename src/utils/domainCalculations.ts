@@ -103,14 +103,15 @@ export function areUnitsCompatible(habitUnit?: string, goalUnit?: string): boole
 }
 
 /**
- * Validates and sanitizes scheduled days array to prevent infinite loops
+ * Validates and sanitizes scheduled days array to prevent infinite loops.
+ * Rejects non-integers (e.g. 1.5), out-of-range numbers, NaN and Infinity.
  */
 export function validateDaysOfWeek(daysOfWeek?: number[]): number[] {
   if (!Array.isArray(daysOfWeek)) return [1, 2, 3, 4, 5, 6, 7];
   const valid = daysOfWeek
     .map(Number)
-    .filter(d => Number.isFinite(d) && d >= 1 && d <= 7);
-  return valid.length > 0 ? Array.from(new Set(valid)).sort() : [1, 2, 3, 4, 5, 6, 7];
+    .filter(d => Number.isInteger(d) && d >= 1 && d <= 7);
+  return valid.length > 0 ? Array.from(new Set(valid)).sort((a, b) => a - b) : [1, 2, 3, 4, 5, 6, 7];
 }
 
 export interface HabitStreakStats {
@@ -381,63 +382,29 @@ function calculateWeeklyTargetStats(
 }
 
 /**
- * Calculates streak and best streak for goal internal habits
- * Based on date-anchored history without unsupported guesswork from free-text frequency.
+ * Calculates metrics for goal internal habits.
+ * Since targetFrequency is free-text and not a structured schedule,
+ * we do not guess an unreliable schedule-dependent streak;
+ * instead we calculate accurate total completed days ("Jami X kun bajarilgan").
  */
-export function calculateInternalHabitStreak(
+export function calculateInternalHabitStats(
   history: Record<string, { completed: boolean; timestamp?: string }> = {},
   referenceDateStr: string = getDateStringInTimezone(),
   existingBestStreak: number = 0
-): { streak: number; bestStreak: number } {
-  const isTodayDone = !!history[referenceDateStr]?.completed;
-  const yesterdayStr = addDaysToYMD(referenceDateStr, -1);
-  const isYesterdayDone = !!history[yesterdayStr]?.completed;
-
-  let currentStreak = 0;
-  let startCheck: string | null = null;
-  if (isTodayDone) {
-    currentStreak = 1;
-    startCheck = yesterdayStr;
-  } else if (isYesterdayDone) {
-    currentStreak = 1;
-    startCheck = addDaysToYMD(yesterdayStr, -1);
-  }
-
-  if (startCheck) {
-    let check = startCheck;
-    while (history[check]?.completed) {
-      currentStreak++;
-      check = addDaysToYMD(check, -1);
-    }
-  }
-
-  const completedDates = Object.keys(history)
-    .filter(d => d <= referenceDateStr && history[d]?.completed)
-    .sort();
-
-  let maxHistorical = 0;
-  let running = 0;
-  let prevDate: string | null = null;
-
-  for (const d of completedDates) {
-    if (!prevDate) {
-      running = 1;
-    } else {
-      if (d === addDaysToYMD(prevDate, 1)) {
-        running++;
-      } else {
-        running = 1;
-      }
-    }
-    prevDate = d;
-    if (running > maxHistorical) maxHistorical = running;
-  }
+): { streak: number; bestStreak: number; totalCompletions: number } {
+  const completedDates = Object.keys(history).filter(
+    d => d <= referenceDateStr && history[d]?.completed
+  );
+  const totalCompletions = completedDates.length;
 
   return {
-    streak: currentStreak,
-    bestStreak: Math.max(existingBestStreak || 0, maxHistorical, currentStreak),
+    streak: totalCompletions,
+    bestStreak: Math.max(existingBestStreak || 0, totalCompletions),
+    totalCompletions,
   };
 }
+
+export const calculateInternalHabitStreak = calculateInternalHabitStats;
 
 /**
  * Calculates updated habit and linked goal state atomically
@@ -586,17 +553,19 @@ export function calculatePostponedTask(
   minutesOrDate: number | string,
   now: Date = new Date(),
   timezone: string = 'Asia/Tashkent'
-): Partial<Task> {
+): Partial<Task> | null {
   if (typeof minutesOrDate === 'string') {
+    const trimmed = minutesOrDate.trim();
+    if (!trimmed) return null;
     return {
-      date: minutesOrDate,
+      date: trimmed,
       status: 'postponed',
-      postponedUntil: minutesOrDate,
+      postponedUntil: trimmed,
     };
   }
 
-  if (!Number.isFinite(minutesOrDate) || isNaN(minutesOrDate)) {
-    return { status: 'postponed' };
+  if (typeof minutesOrDate !== 'number' || !Number.isFinite(minutesOrDate) || isNaN(minutesOrDate)) {
+    return null;
   }
 
   const minutesToAdd = Math.round(minutesOrDate);

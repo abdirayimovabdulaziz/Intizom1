@@ -3,11 +3,13 @@ import {
   applyHabitToggle,
   calculateHabitStreakAndStats,
   calculateInternalHabitStreak,
+  calculateInternalHabitStats,
   calculatePostponedTask,
   generateEntityId,
   areUnitsCompatible,
   getDateStringInTimezone,
   addDaysToYMD,
+  validateDaysOfWeek,
 } from '../utils/domainCalculations';
 import { Habit, Goal, Task, GoalInternalHabit } from '../types';
 import {
@@ -284,9 +286,10 @@ console.log('=== KUNLIK YORDAMCHI DOMEN TESTLARI ===\n');
 
   const postponed = calculatePostponedTask(task, 15, new Date('2026-10-29T18:50:00Z'), 'Asia/Tashkent');
 
-  assert(postponed.date === '2026-10-30', 'g) Yarim tundan o\'tganda sana keyingi kunga o\'tishi kerak (2026-10-30)', `Sana: ${postponed.date}`);
-  assert(postponed.time === '00:05', 'g) Yangi vaqt 00:05 bo\'lishi kerak', `Vaqt: ${postponed.time}`);
-  assert(postponed.status === 'postponed', 'g) Status "postponed" bo\'lishi kerak');
+  assert(postponed !== null, 'g) Kechiktirish muvaffaqiyatli natija qaytarishi kerak');
+  assert(postponed?.date === '2026-10-30', 'g) Yarim tundan o\'tganda sana keyingi kunga o\'tishi kerak (2026-10-30)', `Sana: ${postponed?.date}`);
+  assert(postponed?.time === '00:05', 'g) Yangi vaqt 00:05 bo\'lishi kerak', `Vaqt: ${postponed?.time}`);
+  assert(postponed?.status === 'postponed', 'g) Status "postponed" bo\'lishi kerak');
 
   // Soati yo'q vazifani kechiktirish:
   const taskNoTime: Task = {
@@ -296,10 +299,11 @@ console.log('=== KUNLIK YORDAMCHI DOMEN TESTLARI ===\n');
   };
   const fixedNow = new Date('2026-10-29T09:30:00Z'); // 14:30 in Tashkent (UTC+5)
   const postponedUntimed = calculatePostponedTask(taskNoTime, 30, fixedNow, 'Asia/Tashkent');
+  assert(postponedUntimed !== null, 'g) Soatsiz vazifa kechiktirishi muvaffaqiyatli');
   assert(
-    postponedUntimed.date === '2026-10-29' && postponedUntimed.time === '15:00',
+    postponedUntimed?.date === '2026-10-29' && postponedUntimed?.time === '15:00',
     'g) Soati yo\'q bugungi vazifa joriy vaqtdan +30 daqiqaga surilishi kerak (14:30 + 30m -> 15:00)',
-    `Natija: ${postponedUntimed.date} ${postponedUntimed.time}`
+    `Natija: ${postponedUntimed?.date} ${postponedUntimed?.time}`
   );
 }
 
@@ -375,7 +379,7 @@ console.log('=== KUNLIK YORDAMCHI DOMEN TESTLARI ===\n');
   );
 }
 
-// Test J: Maqsad ichidagi ichki odatlar (history, streak, legacy migratsiya)
+// Test J: Maqsad ichidagi ichki odatlar (tarixdan 'Jami X kun bajarilgan' ko'rsatkichi)
 {
   const internalHabit: GoalInternalHabit = {
     id: 'ghabit-1',
@@ -390,18 +394,17 @@ console.log('=== KUNLIK YORDAMCHI DOMEN TESTLARI ===\n');
     },
   };
 
-  // 1. Streak bugun (2026-10-29) hali bajarilmagan holatda 2 bo'lishi kerak (kechagi 2 kun uzluksiz)
-  const statsPre = calculateInternalHabitStreak(internalHabit.history, '2026-10-29', 0);
-  assert(statsPre.streak === 2, 'j1) Ichki odat bugun belgilanmagan bo\'lsa ham kechagidan kelgan streak 2', `Streak: ${statsPre.streak}`);
+  // 1. Tarixdagi bajarilgan kunlar soni: 2 kun
+  const statsPre = calculateInternalHabitStats(internalHabit.history, '2026-10-29', 0);
+  assert(statsPre.totalCompletions === 2, 'j1) Ichki odat tarixdan jami 2 kun bajarilgan deb hisoblaydi', `Jami: ${statsPre.totalCompletions}`);
 
-  // 2. Bugungi kun (2026-10-29) bajarilganda streak 3 bo'lishi kerak
+  // 2. Bugungi kun (2026-10-29) bajarilganda jami 3 kun bo'ladi
   const historyWithToday = {
     ...internalHabit.history,
     '2026-10-29': { completed: true, timestamp: '2026-10-29T08:00:00Z' },
   };
-  const statsPost = calculateInternalHabitStreak(historyWithToday, '2026-10-29', statsPre.bestStreak);
-  assert(statsPost.streak === 3, 'j2) Ichki odat bugun bajarilganda streak 3 bo\'ladi', `Streak: ${statsPost.streak}`);
-  assert(statsPost.bestStreak === 3, 'j2) bestStreak 3 ga yangilanadi');
+  const statsPost = calculateInternalHabitStats(historyWithToday, '2026-10-29', statsPre.bestStreak);
+  assert(statsPost.totalCompletions === 3, 'j2) Ichki odat bugun bajarilganda jami 3 kun bo\'ladi', `Jami: ${statsPost.totalCompletions}`);
 
   // 3. Eski dateless legacy ichki odat migratsiyasi: bugunga uydirma completion YOZILMASIN
   const legacyInternalHabit: GoalInternalHabit = {
@@ -432,9 +435,9 @@ console.log('=== KUNLIK YORDAMCHI DOMEN TESTLARI ===\n');
     `completedToday: ${normalizedHabit.completedToday}`
   );
   assert(
-    normalizedHabit.streak === 0,
-    'j3) Tarixsiz eski odatda bugungi sana uchun streak 0 ga aylanadi (uydirma streak hisoblanmaydi)',
-    `Streak: ${normalizedHabit.streak}`
+    normalizedHabit.totalCompletions === 0,
+    'j3) Tarixsiz eski odatda totalCompletions 0 bo\'ladi',
+    `totalCompletions: ${normalizedHabit.totalCompletions}`
   );
 }
 
@@ -453,9 +456,9 @@ console.log('=== KUNLIK YORDAMCHI DOMEN TESTLARI ===\n');
   };
   const postponedMidnight = calculatePostponedTask(midnightTask, 15, new Date('2026-10-28T19:00:00Z'), 'Asia/Tashkent');
   assert(
-    postponedMidnight.date === '2026-10-29' && postponedMidnight.time === '00:15',
+    postponedMidnight !== null && postponedMidnight.date === '2026-10-29' && postponedMidnight.time === '00:15',
     'k1) 00:00 vaqtidagi vazifa +15 min surilganda 00:15 bo\'ladi (00 saqlanadi)',
-    `Natija: ${postponedMidnight.date} ${postponedMidnight.time}`
+    `Natija: ${postponedMidnight?.date} ${postponedMidnight?.time}`
   );
 
   // 2. Qurilma UTC da (19:00 UTC = 00:00 Tashkent) bo'lganda va vazifaning soati bo'lmaganda
@@ -467,16 +470,25 @@ console.log('=== KUNLIK YORDAMCHI DOMEN TESTLARI ===\n');
   const nowUtc = new Date('2026-10-28T19:10:00Z');
   const postponedInTashkent = calculatePostponedTask(untimedTask, 20, nowUtc, 'Asia/Tashkent');
   assert(
-    postponedInTashkent.date === '2026-10-29' && postponedInTashkent.time === '00:30',
+    postponedInTashkent !== null && postponedInTashkent.date === '2026-10-29' && postponedInTashkent.time === '00:30',
     'k2) Qurilma UTC da bo\'lsa ham Asia/Tashkent dagi 00:10 vaqtidan +20m = 00:30 bo\'ladi',
-    `Natija: ${postponedInTashkent.date} ${postponedInTashkent.time}`
+    `Natija: ${postponedInTashkent?.date} ${postponedInTashkent?.time}`
   );
 
-  // 3. NaN yoki Infinity kechiktirish qiymati dasturni buzmaydi
+  // 3. NaN yoki Infinity kechiktirish qiymati rad etiladi (null qaytadi)
   const postponedNan = calculatePostponedTask(midnightTask, NaN, nowUtc, 'Asia/Tashkent');
-  assert(postponedNan.status === 'postponed', 'k3) NaN kechiktirish xavfsiz qaytadi');
+  assert(postponedNan === null, 'k3) NaN kechiktirish null qaytaradi');
   const postponedInf = calculatePostponedTask(midnightTask, Infinity, nowUtc, 'Asia/Tashkent');
-  assert(postponedInf.status === 'postponed', 'k3) Infinity kechiktirish xavfsiz qaytadi');
+  assert(postponedInf === null, 'k3) Infinity kechiktirish null qaytaradi');
+
+  // Chaqiruvchi (AppContext) xato holatida vazifaning barcha maydonlarini o'zgartirmay saqlaydi
+  const taskBefore: Task = { ...midnightTask };
+  const updates = calculatePostponedTask(taskBefore, NaN, nowUtc, 'Asia/Tashkent');
+  const taskAfter: Task = updates ? { ...taskBefore, ...updates } : taskBefore;
+  assert(taskAfter.date === taskBefore.date, 'k4) Noto\'g\'ri kechiktirishda sana o\'zgarmaydi');
+  assert(taskAfter.time === taskBefore.time, 'k4) Noto\'g\'ri kechiktirishda vaqt o\'zgarmaydi');
+  assert(taskAfter.status === taskBefore.status, 'k4) Noto\'g\'ri kechiktirishda status o\'zgarmaydi');
+  assert(taskAfter.postponedUntil === taskBefore.postponedUntil, 'k4) Noto\'g\'ri kechiktirishda postponedUntil o\'zgarmaydi');
 }
 
 // Test L: bestStreak ni butun tarixdan izlash va kelajak sanalar himoyasi
@@ -621,7 +633,7 @@ console.log('=== KUNLIK YORDAMCHI DOMEN TESTLARI ===\n');
   });
   const ih = stateAfterIhToggle.goals[0].internalHabits![0];
   assert(ih.completedToday === true, 'm2) Ichki odat TOGGLE_GOAL_INTERNAL_HABIT orqali belgilanadi');
-  assert(ih.streak === 1, 'm2) Ichki odat streak 1 bo\'ladi');
+  assert(ih.totalCompletions === 1, 'm2) Ichki odat totalCompletions 1 bo\'ladi');
   assert(ih.history!['2026-10-29'].completed === true, 'm2) Tarixda sana bilan saqlanadi');
 
   // 3. REFRESH_HABITS_DAILY_STATUS kun almashganda
@@ -638,8 +650,8 @@ console.log('=== KUNLIK YORDAMCHI DOMEN TESTLARI ===\n');
     'm3) Yangi kunda ichki odat completedToday false bo\'ladi'
   );
   assert(
-    stateNextDay.goals[0].internalHabits![0].streak === 1,
-    'm3) Kechagi kun bajarilgani uchun ichki odat streak 1 saqlanadi'
+    stateNextDay.goals[0].internalHabits![0].totalCompletions === 1,
+    'm3) Yangi kunda ham tarixdan olingan totalCompletions 1 saqlanadi'
   );
 }
 
@@ -661,6 +673,57 @@ console.log('=== KUNLIK YORDAMCHI DOMEN TESTLARI ===\n');
   const normalized = normalizeHabitForDate(habitToNormalize, '2026-10-29');
   assert(normalized.streak === 1, 'n1) normalizeHabitForDate kechagi bajarilish asosida streak=1 hisoblaydi');
   assert(normalized.currentQuantityToday === 0, 'n1) Bugungi miqdor 0');
+}
+
+// Test O: validateDaysOfWeek qat'iy butun son tekshiruvi va cheksiz sikl xavfsizligi
+{
+  const def = [1, 2, 3, 4, 5, 6, 7];
+
+  // 1. Kasr son [1.5]
+  const resFloat = validateDaysOfWeek([1.5]);
+  assert(
+    JSON.stringify(resFloat) === JSON.stringify(def),
+    'o1) [1.5] kasr son rad etilib standart 1..7 fallback qaytarishi kerak',
+    `Natija: ${JSON.stringify(resFloat)}`
+  );
+
+  // 2. Diapazondan tashqari [0, 8]
+  const resOutOfRange = validateDaysOfWeek([0, 8]);
+  assert(
+    JSON.stringify(resOutOfRange) === JSON.stringify(def),
+    'o2) [0, 8] rad etilib standart fallback qaytarishi kerak',
+    `Natija: ${JSON.stringify(resOutOfRange)}`
+  );
+
+  // 3. [NaN, Infinity]
+  const resNanInf = validateDaysOfWeek([NaN, Infinity]);
+  assert(
+    JSON.stringify(resNanInf) === JSON.stringify(def),
+    'o3) [NaN, Infinity] rad etilib standart fallback qaytarishi kerak',
+    `Natija: ${JSON.stringify(resNanInf)}`
+  );
+
+  // 4. Aralash [1, 2.5, 3]
+  const resMixed = validateDaysOfWeek([1, 2.5, 3]);
+  assert(
+    JSON.stringify(resMixed) === JSON.stringify([1, 3]),
+    'o4) Aralash [1, 2.5, 3] dan faqat butun sonlar [1, 3] saralab olinishi kerak',
+    `Natija: ${JSON.stringify(resMixed)}`
+  );
+
+  // 5. Yaroqsiz jadval berilganda calculateHabitStreakAndStats cheksiz siklga kirmasdan darhol tugashi kerak
+  const startTime = Date.now();
+  const badStats = calculateHabitStreakAndStats(
+    { '2026-10-28': { completed: true } },
+    'specific_days',
+    [1.5, NaN, 9], // yaroqsiz jadval
+    undefined,
+    '2026-10-29',
+    0
+  );
+  const elapsed = Date.now() - startTime;
+  assert(elapsed < 500, 'o5) Yaroqsiz jadvalda streak hisobi cheksiz siklga kirmaydi (< 500ms)');
+  assert(badStats.streak === 1, 'o5) Fallback (har kuni) asosida kechagi natijadan streak=1 hisoblanadi');
 }
 
 console.log(`\n========================================`);
