@@ -1236,7 +1236,7 @@ export function processEntityCreationFromParsed(
       success: true,
       entityType: 'qabul',
       payload: habitBuild.payload,
-      markDoneToday: parsed.markDoneToday,
+      markDoneToday: parsed.markDoneToday === true,
       feedbackText: `💊 Salomatlik qabuli saqlandi: **"${habitBuild.payload.title}"**`,
     };
   }

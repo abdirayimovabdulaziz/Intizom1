@@ -2,6 +2,7 @@ import { Habit, Goal, GoalInternalHabit, GoalProgressLog } from '../types';
 import {
   applyHabitQuantityChange,
   applyHabitToggle,
+  applyHabitCompletionStatus,
   calculateHabitStreakAndStats,
   calculateInternalHabitStats,
 } from '../utils/domainCalculations';
@@ -22,6 +23,13 @@ export type DomainAction =
   | {
       type: 'TOGGLE_HABIT_TODAY';
       habitId: string;
+      dateStr: string;
+      timestamp: string;
+    }
+  | {
+      type: 'SET_HABIT_COMPLETION_TODAY';
+      habitId: string;
+      completed: boolean;
       dateStr: string;
       timestamp: string;
     }
@@ -211,6 +219,31 @@ export function domainReducer(state: DomainState, action: DomainAction): DomainS
         linkedGoal,
         action.dateStr,
         action.timestamp
+      );
+
+      return {
+        ...state,
+        habits: state.habits.map(h => (h.id === action.habitId ? updatedHabit : h)),
+        goals: updatedGoal
+          ? state.goals.map(g => (g.id === updatedGoal.id ? updatedGoal : g))
+          : state.goals,
+      };
+    }
+
+    case 'SET_HABIT_COMPLETION_TODAY': {
+      const targetHabit = state.habits.find(h => h.id === action.habitId);
+      if (!targetHabit) return state;
+
+      const linkedGoal = targetHabit.linkedGoalId
+        ? state.goals.find(g => g.id === targetHabit.linkedGoalId)
+        : undefined;
+
+      const { updatedHabit, updatedGoal } = applyHabitCompletionStatus(
+        targetHabit,
+        linkedGoal,
+        action.dateStr,
+        action.timestamp,
+        action.completed
       );
 
       return {

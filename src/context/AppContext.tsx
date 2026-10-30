@@ -27,6 +27,7 @@ import {
 import { triggerHaptic } from '../utils/telegram';
 import {
   calculatePostponedTask,
+  calculateHabitIntakeDecision,
   generateEntityId,
   getDateStringInTimezone,
   getDayOfWeekInTimezone,
@@ -65,6 +66,7 @@ interface AppContextType {
   addHabit: (habit: Omit<Habit, 'id' | 'streak' | 'bestStreak' | 'history' | 'currentQuantityToday'>) => Habit;
   updateHabit: (id: string, updates: Partial<Habit>) => void;
   toggleHabitToday: (id: string) => void;
+  markHabitCompletedToday: (id: string) => void;
   logHabitQuantity: (id: string, amount: number) => void;
   deleteHabit: (id: string, permanent?: boolean) => void;
   restoreHabit: (id: string) => void;
@@ -376,6 +378,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     triggerHaptic(currentlyDone ? 'selection' : 'success');
+  };
+
+  const markHabitCompletedToday = (id: string) => {
+    const timestamp = new Date().toISOString();
+    domainDispatch({
+      type: 'SET_HABIT_COMPLETION_TODAY',
+      habitId: id,
+      completed: true,
+      dateStr: activeTodayStr,
+      timestamp,
+    });
+    triggerHaptic('success');
   };
 
   const logHabitQuantity = (id: string, amount: number) => {
@@ -1062,8 +1076,132 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const handleBotAction = (messageId: string, action: BotInlineAction) => {
     const timeStr = getTimeString();
 
+    const executeQabulDecision = (
+      pItem: ParsedItem & { markDoneToday?: boolean; targetHabitId?: string },
+      habitPayload: any,
+      isMarkDoneRequested: boolean
+    ) => {
+      const decision = calculateHabitIntakeDecision(
+        habits,
+        {
+          title: pItem.title,
+          targetHabitId: pItem.targetHabitId,
+          markDoneToday: isMarkDoneRequested,
+        },
+        activeTodayStr
+      );
+
+      if (decision.action === 'disambiguation_needed') {
+        const disambigActions: BotInlineAction[] = decision.candidates.map(candidate => ({
+          id: generateEntityId('choose-habit'),
+          label: `💊 ${candidate.title}`,
+          action: 'confirm_create',
+          payload: {
+            ...pItem,
+            category: 'qabul',
+            habitType: 'supplement_health',
+            targetHabitId: candidate.id,
+            title: candidate.title,
+            markDoneToday: isMarkDoneRequested,
+          },
+          variant: 'secondary',
+        }));
+
+        disambigActions.push({
+          id: generateEntityId('cancel'),
+          label: '❌ Bekor qilish',
+          action: 'cancel_prompt',
+          variant: 'danger',
+        });
+
+        setMessages(prev => [
+          ...prev,
+          {
+            id: generateEntityId('msg-disambig'),
+            sender: 'bot',
+            text: decision.feedbackText,
+            timestamp: timeStr,
+            actions: disambigActions,
+          },
+        ]);
+        setMessages(prev => prev.map(m => (m.id === messageId ? { ...m, actions: undefined } : m)));
+        return;
+      }
+
+      if (decision.action === 'already_exists') {
+        setMessages(prev => [
+          ...prev,
+          {
+            id: generateEntityId('conf-exist'),
+            sender: 'bot',
+            text: decision.feedbackText,
+            timestamp: timeStr,
+            actions: [
+              {
+                id: 'open-app',
+                label: "📱 Odatlarni ko'rish",
+                action: 'open_miniapp',
+                variant: 'primary',
+              },
+            ],
+          },
+        ]);
+        setMessages(prev => prev.map(m => (m.id === messageId ? { ...m, actions: undefined } : m)));
+        return;
+      }
+
+      if (decision.action === 'mark_completed') {
+        markHabitCompletedToday(decision.habit.id);
+        setMessages(prev => [
+          ...prev,
+          {
+            id: generateEntityId('conf'),
+            sender: 'bot',
+            text: decision.feedbackText,
+            timestamp: timeStr,
+            actions: [
+              {
+                id: 'open-app',
+                label: "📱 Odatlarni ko'rish",
+                action: 'open_miniapp',
+                variant: 'primary',
+              },
+            ],
+          },
+        ]);
+        setMessages(prev => prev.map(m => (m.id === messageId ? { ...m, actions: undefined } : m)));
+        return;
+      }
+
+      if (decision.action === 'create_new') {
+        const created = addHabit(habitPayload);
+        if (decision.shouldMarkCompletion) {
+          markHabitCompletedToday(created.id);
+        }
+        setMessages(prev => [
+          ...prev,
+          {
+            id: generateEntityId('conf'),
+            sender: 'bot',
+            text: decision.feedbackText,
+            timestamp: timeStr,
+            actions: [
+              {
+                id: 'open-app',
+                label: "📱 Mini App'da ko'rish",
+                action: 'open_miniapp',
+                variant: 'primary',
+              },
+            ],
+          },
+        ]);
+        setMessages(prev => prev.map(m => (m.id === messageId ? { ...m, actions: undefined } : m)));
+        return;
+      }
+    };
+
     if (action.action === 'confirm_create' && action.payload) {
-      const payload: ParsedItem & { markDoneToday?: boolean } = action.payload;
+      const payload: ParsedItem & { markDoneToday?: boolean; targetHabitId?: string } = action.payload;
 
       // EXPENSE CONFIRMATION
       if (payload.category === 'harajat') {
@@ -1121,58 +1259,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           return;
         }
 
-        // Check if habit already exists
-        const existing = habits.find(
-          h => h.title.toLowerCase().includes(payload.title.toLowerCase()) ||
-               payload.title.toLowerCase().includes(h.title.toLowerCase())
-        );
-
-        if (existing) {
-          // Toggle or mark completed
-          if (!existing.history[activeTodayStr]?.completed) {
-            toggleHabitToday(existing.id);
-          }
-          setMessages(prev => [
-            ...prev,
-            {
-              id: generateEntityId('conf'),
-              sender: 'bot',
-              text: `✅ Qabul qilindi! **"${existing.title}"** bugungi ro'yxatda bajarilgan deb belgilandi! (🔥 ${existing.streak + 1} kun uzluksiz)`,
-              timestamp: timeStr,
-              actions: [
-                {
-                  id: 'open-app',
-                  label: '📱 Odatlarni ko\'rish',
-                  action: 'open_miniapp',
-                  variant: 'primary',
-                },
-              ],
-            },
-          ]);
-        } else {
-          const created = addHabit(buildRes.payload);
-          if (payload.markDoneToday) {
-            toggleHabitToday(created.id);
-          }
-
-          setMessages(prev => [
-            ...prev,
-            {
-              id: generateEntityId('conf'),
-              sender: 'bot',
-              text: `🎉 Yangi qabul saqlandi: **"${created.title}"** (${payload.dosage || ''})!\nHar kuni belgilashingiz mumkin.`,
-              timestamp: timeStr,
-              actions: [
-                {
-                  id: 'open-app',
-                  label: '📱 Mini App\'da ko\'rish',
-                  action: 'open_miniapp',
-                  variant: 'primary',
-                },
-              ],
-            },
-          ]);
-        }
+        executeQabulDecision(payload, buildRes.payload, payload.markDoneToday === true);
       }
       // TASK OR MEETING
       else if (payload.category === 'vazifa' || payload.category === 'uchrashuv') {
@@ -1319,38 +1406,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           },
         ]);
       } else if (res.entityType === 'qabul') {
-        const existing = habits.find(
-          h => h.title.toLowerCase().includes(res.payload.title.toLowerCase()) ||
-               res.payload.title.toLowerCase().includes(h.title.toLowerCase())
-        );
-
-        if (existing) {
-          if (!existing.history[activeTodayStr]?.completed) {
-            toggleHabitToday(existing.id);
-          }
-          setMessages(prev => [
-            ...prev,
-            {
-              id: generateEntityId('res'),
-              sender: 'bot',
-              text: `✅ Qabul qilindi! **"${existing.title}"** bugungi ro'yxatda bajarilgan deb belgilandi!`,
-              timestamp: timeStr,
-              actions: [{ id: 'opn', label: '📱 Mini App\'ni ochish', action: 'open_miniapp', variant: 'primary' }],
-            },
-          ]);
-        } else {
-          const created = addHabit(res.payload);
-          setMessages(prev => [
-            ...prev,
-            {
-              id: generateEntityId('res'),
-              sender: 'bot',
-              text: `💊 Salomatlik qabuli saqlandi: "${created.title}"${created.dosage ? ` (${created.dosage})` : ''}`,
-              timestamp: timeStr,
-              actions: [{ id: 'opn', label: '📱 Mini App\'ni ochish', action: 'open_miniapp', variant: 'primary' }],
-            },
-          ]);
-        }
+        executeQabulDecision(p, res.payload, res.markDoneToday === true);
       } else if (res.entityType === 'vazifa' || res.entityType === 'uchrashuv') {
         const createdTask = addTask(res.payload);
         setMessages(prev => [
@@ -1610,6 +1666,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         addHabit,
         updateHabit,
         toggleHabitToday,
+        markHabitCompletedToday,
         logHabitQuantity,
         deleteHabit,
         restoreHabit,

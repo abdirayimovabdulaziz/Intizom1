@@ -11,7 +11,8 @@ import {
   buildTaskCreatePayload,
   processEntityCreationFromParsed,
 } from '../utils/uzbekNlp';
-import { ParsedItem } from '../types';
+import { calculateHabitIntakeDecision } from '../utils/domainCalculations';
+import { ParsedItem, Habit } from '../types';
 
 let passed = 0;
 let failed = 0;
@@ -570,6 +571,55 @@ async function runTests() {
       assert.strictEqual(res.payload.dosage, undefined);
       assert.strictEqual(res.payload.timeSlot, undefined);
       assert.strictEqual(res.payload.habitType, 'supplement_health');
+    }
+  });
+
+  test('10. clarify_type -> qabul oqimi: "kreatin" tanlanganda completion o‘zgarmaydi va markDoneToday tekshiriladi', () => {
+    // 1. Foydalanuvchi "kreatin" deb yozdi, parser uni noaniq/odat/qabul deb topdi
+    const parsed = parseLocalUzbekIntent("kreatin");
+    
+    // Foydalanuvchi toifa tanlashda "Qabul" ni tanladi (clarify_type payload: { ...parsed, category: 'qabul', habitType: 'supplement_health' })
+    const clarifyQabulPayload: ParsedItem = {
+      ...parsed,
+      category: 'qabul',
+      habitType: 'supplement_health',
+    };
+
+    const res = processEntityCreationFromParsed(clarifyQabulPayload, '2026-03-04', '12:00');
+    assert.strictEqual(res.success, true);
+    if (res.success && res.entityType === 'qabul') {
+      // processEntityCreationFromParsed natijasida markDoneToday false (yoki yo'q) bo'ladi
+      assert.strictEqual(res.markDoneToday, false);
+
+      // Mavjud "Kreatin" odati bor
+      const existingHabits: Habit[] = [
+        {
+          id: 'h-creatine-active',
+          title: 'Kreatin',
+          category: 'odat',
+          habitType: 'supplement_health',
+          frequency: 'daily',
+          daysOfWeek: [1, 2, 3, 4, 5, 6, 7],
+          hasQuantity: false,
+          streak: 2,
+          bestStreak: 2,
+          history: {},
+        },
+      ];
+
+      // Production qaror funksiyasiga berilganda
+      const decision = calculateHabitIntakeDecision(
+        existingHabits,
+        {
+          title: res.payload.title,
+          markDoneToday: Boolean(res.markDoneToday),
+        },
+        '2026-03-04'
+      );
+
+      // Toifa tanlashning o'zi completionni o'zgartirmaydi!
+      assert.strictEqual(decision.shouldMarkCompletion, false);
+      assert.strictEqual(decision.action, 'already_exists');
     }
   });
 

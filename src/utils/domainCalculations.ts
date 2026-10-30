@@ -494,25 +494,37 @@ export function applyHabitQuantityChange(
 }
 
 /**
- * Calculates updated habit and linked goal state for toggle action atomically
+ * Applies completion status (true or false) to a habit idempotently.
+ * If targetCompleted matches current status, does not invert or duplicate.
  */
-export function applyHabitToggle(
+export function applyHabitCompletionStatus(
   habit: Habit,
   linkedGoal: Goal | undefined,
   dateStr: string,
-  timestamp: string
-): { updatedHabit: Habit; updatedGoal?: Goal; willBeCompleted: boolean; actualDelta: number } {
+  timestamp: string,
+  targetCompleted: boolean = true
+): { updatedHabit: Habit; updatedGoal?: Goal; wasAlreadyCompleted: boolean; actualDelta: number } {
   const currentRecord = habit.history[dateStr] || { completed: false, quantity: 0 };
-  const willBeCompleted = !currentRecord.completed;
+  const wasAlreadyCompleted = !!currentRecord.completed;
+
+  if (wasAlreadyCompleted === targetCompleted) {
+    return {
+      updatedHabit: habit,
+      updatedGoal: linkedGoal,
+      wasAlreadyCompleted,
+      actualDelta: 0,
+    };
+  }
+
   const targetQty = habit.targetQuantity || 1;
-  const newQty = willBeCompleted ? targetQty : 0;
+  const newQty = targetCompleted ? targetQty : 0;
   const prevQty = currentRecord.quantity || 0;
   const actualDelta = newQty - prevQty;
 
   const updatedHistory = {
     ...habit.history,
     [dateStr]: {
-      completed: willBeCompleted,
+      completed: targetCompleted,
       quantity: newQty,
       timestamp,
     },
@@ -553,7 +565,209 @@ export function applyHabitToggle(
     };
   }
 
+  return { updatedHabit, updatedGoal, wasAlreadyCompleted, actualDelta };
+}
+
+/**
+ * Calculates updated habit and linked goal state for toggle action atomically
+ */
+export function applyHabitToggle(
+  habit: Habit,
+  linkedGoal: Goal | undefined,
+  dateStr: string,
+  timestamp: string
+): { updatedHabit: Habit; updatedGoal?: Goal; willBeCompleted: boolean; actualDelta: number } {
+  const currentRecord = habit.history[dateStr] || { completed: false, quantity: 0 };
+  const willBeCompleted = !currentRecord.completed;
+  const { updatedHabit, updatedGoal, actualDelta } = applyHabitCompletionStatus(
+    habit,
+    linkedGoal,
+    dateStr,
+    timestamp,
+    willBeCompleted
+  );
   return { updatedHabit, updatedGoal, willBeCompleted, actualDelta };
+}
+
+export interface HabitIntakeRequest {
+  title: string;
+  targetHabitId?: string;
+  markDoneToday?: boolean;
+}
+
+export type HabitIntakeDecision =
+  | {
+      action: 'mark_completed';
+      habit: Habit;
+      alreadyCompleted: boolean;
+      shouldMarkCompletion: true;
+      feedbackText: string;
+    }
+  | {
+      action: 'already_exists';
+      habit: Habit;
+      shouldMarkCompletion: false;
+      feedbackText: string;
+    }
+  | {
+      action: 'disambiguation_needed';
+      candidates: Habit[];
+      shouldMarkCompletion: false;
+      feedbackText: string;
+    }
+  | {
+      action: 'create_new';
+      shouldMarkCompletion: boolean;
+      feedbackText: string;
+    };
+
+/**
+ * Production decision function for habit / supplement intakes:
+ *
+ * Rules:
+ * 1. Archived habits (isArchived === true) are never automatically selected.
+ * 2. If targetHabitId is provided, authoritative match on active habits:
+ *    - If markDoneToday: 'mark_completed' (idempotent, checks alreadyCompleted)
+ *    - If not markDoneToday: 'already_exists'
+ * 3. If no targetHabitId:
+ *    - Check exact active matches (case/whitespace/apostrophe normalized).
+ *    - If > 1 exact matches: 'disambiguation_needed' (never arbitrarily pick one)
+ *    - If 1 exact match:
+ *        * If markDoneToday: 'mark_completed'
+ *        * If not markDoneToday: 'already_exists' (do not create duplicate, do not mark completed)
+ *    - If 0 exact matches:
+ *        * Check partial / token matches on active habits.
+ *        * If > 1 candidates: 'disambiguation_needed' (never arbitrarily pick one)
+ *        * If 1 candidate:
+ *            - If markDoneToday: 'mark_completed'
+ *            - If not markDoneToday: 'already_exists'
+ *        * If 0 candidates:
+ *            - 'create_new' (with shouldMarkCompletion = !!markDoneToday)
+ */
+export function calculateHabitIntakeDecision(
+  allHabits: Habit[],
+  request: HabitIntakeRequest,
+  dateStr: string
+): HabitIntakeDecision {
+  const activeHabits = allHabits.filter(h => !h.isArchived);
+
+  // 1. Authoritative habit ID
+  if (request.targetHabitId) {
+    const target = activeHabits.find(h => h.id === request.targetHabitId);
+    if (target) {
+      if (request.markDoneToday) {
+        const alreadyCompleted = !!target.history[dateStr]?.completed;
+        return {
+          action: 'mark_completed',
+          habit: target,
+          alreadyCompleted,
+          shouldMarkCompletion: true,
+          feedbackText: alreadyCompleted
+            ? `✅ "${target.title}" bugun allaqachon bajarilgan!`
+            : `✅ Qabul qilindi! "${target.title}" bugungi ro'yxatda bajarilgan deb belgilandi!`,
+        };
+      } else {
+        return {
+          action: 'already_exists',
+          habit: target,
+          shouldMarkCompletion: false,
+          feedbackText: `ℹ️ "${target.title}" odati allaqachon ro'yxatingizda mavjud.`,
+        };
+      }
+    }
+  }
+
+  const clean = (s: string) =>
+    s.toLowerCase()
+      .replace(/['`‘ʻ’ʼ]/g, "'")
+      .replace(/[\s\-_]+/g, ' ')
+      .trim();
+
+  const reqNorm = clean(request.title || '');
+
+  // 2. Exact match check
+  const exactMatches = activeHabits.filter(h => clean(h.title) === reqNorm);
+  if (exactMatches.length === 1) {
+    const matched = exactMatches[0];
+    if (request.markDoneToday) {
+      const alreadyCompleted = !!matched.history[dateStr]?.completed;
+      return {
+        action: 'mark_completed',
+        habit: matched,
+        alreadyCompleted,
+        shouldMarkCompletion: true,
+        feedbackText: alreadyCompleted
+          ? `✅ "${matched.title}" bugun allaqachon bajarilgan!`
+          : `✅ Qabul qilindi! "${matched.title}" bugungi ro'yxatda bajarilgan deb belgilandi!`,
+      };
+    } else {
+      return {
+        action: 'already_exists',
+        habit: matched,
+        shouldMarkCompletion: false,
+        feedbackText: `ℹ️ "${matched.title}" odati allaqachon ro'yxatingizda mavjud.`,
+      };
+    }
+  }
+
+  if (exactMatches.length > 1) {
+    return {
+      action: 'disambiguation_needed',
+      candidates: exactMatches,
+      shouldMarkCompletion: false,
+      feedbackText: `🔍 "${request.title}" bo'yicha bir nechta mos odat topildi. Iltimos, aynan qaysi birini nazarda tutganingizni tanlang:`,
+    };
+  }
+
+  // 3. Partial / token match check
+  const partialMatches = activeHabits.filter(h => {
+    const hNorm = clean(h.title);
+    if (hNorm.includes(reqNorm) || reqNorm.includes(hNorm)) return true;
+    const hTokens = hNorm.split(' ').filter(t => t.length > 3);
+    const reqTokens = reqNorm.split(' ').filter(t => t.length > 3);
+    return reqTokens.some(t => hTokens.includes(t));
+  });
+
+  if (partialMatches.length > 1) {
+    return {
+      action: 'disambiguation_needed',
+      candidates: partialMatches,
+      shouldMarkCompletion: false,
+      feedbackText: `🔍 "${request.title}" bo'yicha bir nechta mos odat topildi. Iltimos, aynan qaysi birini nazarda tutganingizni tanlang:`,
+    };
+  }
+
+  if (partialMatches.length === 1) {
+    const matched = partialMatches[0];
+    if (request.markDoneToday) {
+      const alreadyCompleted = !!matched.history[dateStr]?.completed;
+      return {
+        action: 'mark_completed',
+        habit: matched,
+        alreadyCompleted,
+        shouldMarkCompletion: true,
+        feedbackText: alreadyCompleted
+          ? `✅ "${matched.title}" bugun allaqachon bajarilgan!`
+          : `✅ Qabul qilindi! "${matched.title}" bugungi ro'yxatda bajarilgan deb belgilandi!`,
+      };
+    } else {
+      return {
+        action: 'already_exists',
+        habit: matched,
+        shouldMarkCompletion: false,
+        feedbackText: `ℹ️ "${matched.title}" odati allaqachon ro'yxatingizda mavjud.`,
+      };
+    }
+  }
+
+  // 4. No matches: create new
+  return {
+    action: 'create_new',
+    shouldMarkCompletion: !!request.markDoneToday,
+    feedbackText: request.markDoneToday
+      ? `🎉 Yangi qabul saqlandi va bugun bajarilgan deb belgilandi: "${request.title}"!`
+      : `🎉 Yangi qabul saqlandi: "${request.title}"! Har kuni belgilashingiz mumkin.`,
+  };
 }
 
 /**

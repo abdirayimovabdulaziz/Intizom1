@@ -126,6 +126,8 @@ export interface ParsedItem {
   frequency?: HabitFrequency | null;
   targetDaysPerWeek?: number | null;
   habitType?: HabitType | null;
+  targetHabitId?: string;
+  markDoneToday?: boolean;
   isIncomeBlocked?: boolean;
   isIntervalBlocked?: boolean;
   isMultipleActionsBlocked?: boolean;

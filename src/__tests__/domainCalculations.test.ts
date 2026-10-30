@@ -1,10 +1,12 @@
 import {
   applyHabitQuantityChange,
   applyHabitToggle,
+  applyHabitCompletionStatus,
   calculateHabitStreakAndStats,
   calculateInternalHabitStreak,
   calculateInternalHabitStats,
   calculatePostponedTask,
+  calculateHabitIntakeDecision,
   generateEntityId,
   areUnitsCompatible,
   getDateStringInTimezone,
@@ -763,6 +765,182 @@ console.log('=== KUNLIK YORDAMCHI DOMEN TESTLARI ===\n');
   const elapsed = Date.now() - startTime;
   assert(elapsed < 500, 'o5) Yaroqsiz jadvalda streak hisobi cheksiz siklga kirmaydi (< 500ms)');
   assert(badStats.streak === 1, 'o5) Fallback (har kuni) asosida kechagi natijadan streak=1 hisoblanadi');
+}
+
+// Test P: calculateHabitIntakeDecision va qabul qaror qoidalarini tekshirish
+{
+  const existingHabits: Habit[] = [
+    {
+      id: 'h-creatine-1',
+      title: 'Kreatin',
+      category: 'odat',
+      habitType: 'supplement_health',
+      frequency: 'daily',
+      daysOfWeek: [1, 2, 3, 4, 5, 6, 7],
+      hasQuantity: false,
+      streak: 2,
+      bestStreak: 5,
+      history: {
+        '2026-10-27': { completed: true },
+        '2026-10-28': { completed: true },
+      },
+    },
+  ];
+
+  // 1. “kreatin” → qabul tanlandi: completion o‘zgarmaydi
+  const decision1 = calculateHabitIntakeDecision(
+    existingHabits,
+    { title: 'Kreatin', markDoneToday: false },
+    '2026-10-29'
+  );
+  assert(decision1.shouldMarkCompletion === false, 'p1) “kreatin” → qabul tanlandi: completion o‘zgarmaydi (shouldMarkCompletion: false)');
+  assert(decision1.action === 'already_exists', 'p1) Mavjud odat bo‘lsa yangi nusxa yaratmasdan mavjudligini bildiradi');
+  assert(!existingHabits[0].history['2026-10-29']?.completed, 'p1) Tarixda bugungi kun belgilanmagan holatda qoladi');
+
+  // 2. markDoneToday=false: completion o‘zgarmaydi
+  const decision2 = calculateHabitIntakeDecision(
+    existingHabits,
+    { title: 'Kreatin', markDoneToday: false },
+    '2026-10-29'
+  );
+  assert(decision2.shouldMarkCompletion === false, 'p2) markDoneToday=false: completion o‘zgarmaydi');
+
+  // 3. Tasdiqlangan bajarilish va aniq habit ID: bir marta belgilanadi
+  const decision3 = calculateHabitIntakeDecision(
+    existingHabits,
+    { title: 'Kreatin', targetHabitId: 'h-creatine-1', markDoneToday: true },
+    '2026-10-29'
+  );
+  assert(decision3.shouldMarkCompletion === true, 'p3) Tasdiqlangan bajarilishda shouldMarkCompletion true bo\'ladi');
+  assert(decision3.action === 'mark_completed', 'p3) Aniq habit ID bo\'yicha mark_completed qaytariladi');
+
+  const stateAfterDone = domainReducer(
+    { habits: existingHabits, goals: [] },
+    {
+      type: 'SET_HABIT_COMPLETION_TODAY',
+      habitId: 'h-creatine-1',
+      completed: true,
+      dateStr: '2026-10-29',
+      timestamp: '2026-10-29T11:00:00Z',
+    }
+  );
+  assert(
+    stateAfterDone.habits[0].history['2026-10-29']?.completed === true,
+    'p3) Bugungi kunda bajarilgan deb saqlanadi'
+  );
+  assert(
+    stateAfterDone.habits[0].streak === 3,
+    'p3) Streak 2 dan 3 ga oshadi'
+  );
+
+  // 4. Ikki o‘xshash nom: avtomatik belgilash yo‘q
+  const twoSimilarHabits: Habit[] = [
+    {
+      id: 'h-creatine-morning',
+      title: 'Kreatin ertalab',
+      category: 'odat',
+      habitType: 'supplement_health',
+      frequency: 'daily',
+      daysOfWeek: [1, 2, 3, 4, 5, 6, 7],
+      hasQuantity: false,
+      streak: 0,
+      bestStreak: 0,
+      history: {},
+    },
+    {
+      id: 'h-creatine-evening',
+      title: 'Kreatin kechqurun',
+      category: 'odat',
+      habitType: 'supplement_health',
+      frequency: 'daily',
+      daysOfWeek: [1, 2, 3, 4, 5, 6, 7],
+      hasQuantity: false,
+      streak: 0,
+      bestStreak: 0,
+      history: {},
+    },
+  ];
+
+  const decision4 = calculateHabitIntakeDecision(
+    twoSimilarHabits,
+    { title: 'Kreatin', markDoneToday: true },
+    '2026-10-29'
+  );
+  assert(decision4.action === 'disambiguation_needed', 'p4) Ikki o‘xshash nom: disambiguation_needed qaytariladi');
+  assert(decision4.shouldMarkCompletion === false, 'p4) Avtomatik belgilash yo\'q (shouldMarkCompletion: false)');
+  if (decision4.action === 'disambiguation_needed') {
+    assert(decision4.candidates.length === 2, 'p4) Ikkala nomzod ham tanlash uchun qaytariladi');
+  }
+
+  // 5. Arxivlangan odat: avtomatik belgilash yo‘q
+  const archivedHabits: Habit[] = [
+    {
+      id: 'h-archived-creatine',
+      title: 'Kreatin',
+      category: 'odat',
+      habitType: 'supplement_health',
+      frequency: 'daily',
+      daysOfWeek: [1, 2, 3, 4, 5, 6, 7],
+      hasQuantity: false,
+      streak: 0,
+      bestStreak: 0,
+      history: {},
+      isArchived: true,
+    },
+  ];
+
+  const decision5 = calculateHabitIntakeDecision(
+    archivedHabits,
+    { title: 'Kreatin', markDoneToday: true },
+    '2026-10-29'
+  );
+  assert(decision5.action === 'create_new', 'p5) Arxivlangan odat avtomatik tanlanmasdan yangi sifatida ko\'riladi');
+
+  // 6. Bugun allaqachon bajarilgan odat: qayta tasdiqlash uni bekor qilmaydi
+  const alreadyDoneHabit: Habit = {
+    id: 'h-already-done',
+    title: 'Kreatin',
+    category: 'odat',
+    habitType: 'supplement_health',
+    frequency: 'daily',
+    daysOfWeek: [1, 2, 3, 4, 5, 6, 7],
+    hasQuantity: false,
+    streak: 4,
+    bestStreak: 4,
+    history: {
+      '2026-10-29': { completed: true, timestamp: '2026-10-29T08:00:00Z' },
+    },
+  };
+
+  const decision6 = calculateHabitIntakeDecision(
+    [alreadyDoneHabit],
+    { title: 'Kreatin', targetHabitId: 'h-already-done', markDoneToday: true },
+    '2026-10-29'
+  );
+  assert(decision6.action === 'mark_completed', 'p6) mark_completed action qaytariladi');
+  if (decision6.action === 'mark_completed') {
+    assert(decision6.alreadyCompleted === true, 'p6) alreadyCompleted true deb aniqlanadi');
+  }
+
+  // Reducer ga qo'llanganda uni bekor qilmaydi (completed: true saqlanadi)
+  const stateReconfirm = domainReducer(
+    { habits: [alreadyDoneHabit], goals: [] },
+    {
+      type: 'SET_HABIT_COMPLETION_TODAY',
+      habitId: 'h-already-done',
+      completed: true,
+      dateStr: '2026-10-29',
+      timestamp: '2026-10-29T12:00:00Z',
+    }
+  );
+  assert(
+    stateReconfirm.habits[0].history['2026-10-29']?.completed === true,
+    'p6) Bugun allaqachon bajarilgan odat qayta tasdiqlanganda bekor bo\'lmaydi (completed: true saqlanadi)'
+  );
+  assert(
+    stateReconfirm.habits[0].streak === 4,
+    'p6) Streak 4 holida o\'zgarmay qoladi'
+  );
 }
 
 console.log(`\n========================================`);
