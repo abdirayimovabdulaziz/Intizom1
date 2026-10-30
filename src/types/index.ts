@@ -44,14 +44,17 @@ export interface Habit {
   isArchived?: boolean;
 }
 
-export type ExpenseCategory =
-  | 'oziq_ovqat'
-  | 'transport'
-  | 'salomatlik'
-  | 'sport'
-  | 'talim'
-  | 'shaxsiy'
-  | 'boshqa';
+export const EXPENSE_CATEGORIES = [
+  'oziq_ovqat',
+  'transport',
+  'salomatlik',
+  'sport',
+  'talim',
+  'shaxsiy',
+  'boshqa',
+] as const;
+
+export type ExpenseCategory = (typeof EXPENSE_CATEGORIES)[number];
 
 export type Currency = 'UZS' | 'USD';
 

@@ -22,6 +22,7 @@ import {
   buildHabitCreatePayload,
   buildExpenseCreatePayload,
   buildTaskCreatePayload,
+  processEntityCreationFromParsed,
 } from '../utils/uzbekNlp';
 import { triggerHaptic } from '../utils/telegram';
 import {
@@ -677,28 +678,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               id: 'clarify-vazifa',
               label: '📌 Vazifa',
               action: 'clarify_type',
-              payload: { category: 'vazifa', title: parsed.title, date: parsed.date, time: parsed.time },
+              payload: { ...parsed, category: 'vazifa' },
               variant: 'primary',
             },
             {
               id: 'clarify-harajat',
               label: '💰 Xarajat',
               action: 'clarify_type',
-              payload: { category: 'harajat', title: parsed.title, amount: parsed.amount, currency: parsed.currency || 'UZS' },
+              payload: { ...parsed, category: 'harajat' },
               variant: 'primary',
             },
             {
               id: 'clarify-qabul',
               label: '💊 Salomatlik / Qabul',
               action: 'clarify_type',
-              payload: { category: 'qabul', title: parsed.title, dosage: parsed.dosage },
+              payload: { ...parsed, category: 'qabul', habitType: 'supplement_health' },
               variant: 'secondary',
             },
             {
               id: 'clarify-odat',
               label: '🔁 Odat',
               action: 'clarify_type',
-              payload: { category: 'odat', title: parsed.title, quantity: parsed.quantity, unit: parsed.unit },
+              payload: { ...parsed, category: 'odat', habitType: 'general' },
               variant: 'secondary',
             },
             {
@@ -1285,102 +1286,97 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         prev.map(m => (m.id === messageId ? { ...m, actions: undefined } : m))
       );
     } else if (action.action === 'clarify_type' && action.payload) {
-      const p = action.payload;
-      if (p.category === 'harajat') {
-        if (!p.amount) {
+      const p = action.payload as ParsedItem;
+      const res = processEntityCreationFromParsed(p, activeTodayStr, timeStr);
+
+      if (!res.success) {
+        setMessages(prev => [
+          ...prev,
+          {
+            id: generateEntityId('res-err'),
+            sender: 'bot',
+            text: `❌ ${res.error}`,
+            timestamp: timeStr,
+          },
+        ]);
+        setMessages(prev =>
+          prev.map(m => (m.id === messageId ? { ...m, actions: undefined } : m))
+        );
+        return;
+      }
+
+      if (res.entityType === 'harajat') {
+        const createdExp = addExpense(res.payload);
+        const formattedMoneyStr = formatMoney(createdExp.amount, createdExp.currency);
+        setMessages(prev => [
+          ...prev,
+          {
+            id: generateEntityId('res'),
+            sender: 'bot',
+            text: `💸 Xarajat saqlandi: "${createdExp.title}" (${formattedMoneyStr})`,
+            timestamp: timeStr,
+            actions: [{ id: 'opn', label: '📱 Xarajatlarni ochish', action: 'open_miniapp', payload: { tab: 'harajatlar' }, variant: 'primary' }],
+          },
+        ]);
+      } else if (res.entityType === 'qabul') {
+        const existing = habits.find(
+          h => h.title.toLowerCase().includes(res.payload.title.toLowerCase()) ||
+               res.payload.title.toLowerCase().includes(h.title.toLowerCase())
+        );
+
+        if (existing) {
+          if (!existing.history[activeTodayStr]?.completed) {
+            toggleHabitToday(existing.id);
+          }
           setMessages(prev => [
             ...prev,
             {
               id: generateEntityId('res'),
               sender: 'bot',
-              text: `Iltimos, "${p.title}" uchun xarajat summasini kiriting (masalan: "${p.title} 45000 so'm").`,
+              text: `✅ Qabul qilindi! **"${existing.title}"** bugungi ro'yxatda bajarilgan deb belgilandi!`,
               timestamp: timeStr,
+              actions: [{ id: 'opn', label: '📱 Mini App\'ni ochish', action: 'open_miniapp', variant: 'primary' }],
             },
           ]);
-          setMessages(prev =>
-            prev.map(m => (m.id === messageId ? { ...m, actions: undefined } : m))
-          );
-          return;
+        } else {
+          const created = addHabit(res.payload);
+          setMessages(prev => [
+            ...prev,
+            {
+              id: generateEntityId('res'),
+              sender: 'bot',
+              text: `💊 Salomatlik qabuli saqlandi: "${created.title}"${created.dosage ? ` (${created.dosage})` : ''}`,
+              timestamp: timeStr,
+              actions: [{ id: 'opn', label: '📱 Mini App\'ni ochish', action: 'open_miniapp', variant: 'primary' }],
+            },
+          ]);
         }
-        const createdExp = addExpense({
-          title: p.title,
-          amount: p.amount,
-          currency: p.currency || 'UZS',
-          category: 'shaxsiy',
-          date: activeTodayStr,
-          time: timeStr,
-          source: 'bot',
-        });
+      } else if (res.entityType === 'vazifa' || res.entityType === 'uchrashuv') {
+        const createdTask = addTask(res.payload);
         setMessages(prev => [
           ...prev,
           {
             id: generateEntityId('res'),
             sender: 'bot',
-            text: `💸 Xarajat saqlandi: "${p.title}" (${formatMoney(createdExp.amount, createdExp.currency || 'UZS')})`,
-            timestamp: timeStr,
-            actions: [{ id: 'opn', label: '📱 Xarajatlarni ochish', action: 'open_miniapp', payload: { tab: 'harajatlar' }, variant: 'primary' }],
-          },
-        ]);
-      } else if (p.category === 'qabul') {
-        addHabit({
-          title: p.title,
-          category: 'odat',
-          habitType: 'supplement_health',
-          dosage: p.dosage || undefined,
-          timeSlot: 'Kunlik',
-          frequency: 'daily',
-          daysOfWeek: [1, 2, 3, 4, 5, 6, 7],
-          hasQuantity: !!p.quantity,
-          targetQuantity: p.quantity || 1,
-          unit: p.unit || 'qabul',
-        });
-        setMessages(prev => [
-          ...prev,
-          {
-            id: generateEntityId('res'),
-            sender: 'bot',
-            text: `💊 Salomatlik qabuli saqlandi: "${p.title}"`,
+            text: `✅ ${createdTask.category === 'uchrashuv' ? 'Uchrashuv' : 'Vazifa'} sifatida saqlandi: "${createdTask.title}" (${formatUzbekDateLabel(createdTask.date, createdTask.time)})`,
             timestamp: timeStr,
             actions: [{ id: 'opn', label: '📱 Mini App\'ni ochish', action: 'open_miniapp', variant: 'primary' }],
           },
         ]);
-      } else if (p.category === 'vazifa') {
-        addTask({
-          title: p.title,
-          category: 'vazifa',
-          date: p.date || activeTodayStr,
-          time: p.time || undefined,
-          status: 'pending',
-          priority: 'medium',
-          source: 'bot',
-        });
+      } else if (res.entityType === 'odat') {
+        const createdHabit = addHabit(res.payload);
+        let freqDesc = 'Har kuni';
+        if (createdHabit.frequency === 'weekly_target') {
+          freqDesc = `Haftasiga ${createdHabit.targetDaysPerWeek} kun`;
+        } else if (createdHabit.frequency === 'specific_days') {
+          freqDesc = `Tanlangan kunlar: ${createdHabit.daysOfWeek.join(', ')}`;
+        }
         setMessages(prev => [
           ...prev,
           {
             id: generateEntityId('res'),
             sender: 'bot',
-            text: `✅ Vazifa sifatida saqlandi: "${p.title}"`,
-            timestamp: timeStr,
-            actions: [{ id: 'opn', label: '📱 Mini App\'ni ochish', action: 'open_miniapp', variant: 'primary' }],
-          },
-        ]);
-      } else if (p.category === 'odat') {
-        addHabit({
-          title: p.title,
-          category: 'odat',
-          habitType: 'general',
-          frequency: 'daily',
-          daysOfWeek: [1, 2, 3, 4, 5, 6, 7],
-          hasQuantity: !!p.quantity,
-          targetQuantity: p.quantity,
-          unit: p.unit,
-        });
-        setMessages(prev => [
-          ...prev,
-          {
-            id: generateEntityId('res'),
-            sender: 'bot',
-            text: `🔁 Odat sifatida saqlandi: "${p.title}"`,
+            text: `🔁 Odat sifatida saqlandi: "${createdHabit.title}" (${freqDesc})`,
             timestamp: timeStr,
             actions: [{ id: 'opn', label: '📱 Mini App\'ni ochish', action: 'open_miniapp', variant: 'primary' }],
           },

@@ -9,6 +9,7 @@ import {
   buildHabitCreatePayload,
   buildExpenseCreatePayload,
   buildTaskCreatePayload,
+  processEntityCreationFromParsed,
 } from '../utils/uzbekNlp';
 import { ParsedItem } from '../types';
 
@@ -362,6 +363,213 @@ async function runTests() {
     if (res.success) {
       assert.strictEqual(res.payload.frequency, 'weekly_target');
       assert.strictEqual(res.payload.targetDaysPerWeek, 3);
+    }
+  });
+
+  // 10. Production clarify_type va umumiy yaratish dispatcher'i (processEntityCreationFromParsed) testlari
+  test('10. clarify_type oqimi: weekly_target turi tanlangandan keyin ham saqlanadi', () => {
+    // Parserdan noaniq deb chiqqan, ammo haftalik jadvalga ega ParsedItem
+    const ambiguousWeekly: ParsedItem = {
+      category: 'noaniq',
+      title: 'Haftasiga 3 kun zal',
+      frequency: 'weekly_target',
+      targetDaysPerWeek: 3,
+      daysOfWeek: [1, 2, 3, 4, 5, 6, 7],
+      confidence: 0.85,
+      explanationUz: '',
+      source: 'local-rules',
+    };
+
+    // AppContext dagi clarify_type tugmasi payload'i: { ...parsed, category: 'odat' }
+    const clarifyPayload: ParsedItem = { ...ambiguousWeekly, category: 'odat' };
+    const res = processEntityCreationFromParsed(clarifyPayload, '2026-03-04', '12:00');
+
+    assert.strictEqual(res.success, true);
+    if (res.success && res.entityType === 'odat') {
+      assert.strictEqual(res.payload.frequency, 'weekly_target');
+      assert.strictEqual(res.payload.targetDaysPerWeek, 3);
+      assert.strictEqual(res.payload.title, 'Haftasiga 3 kun zal');
+    }
+  });
+
+  test('10. clarify_type oqimi: specific_days turi tanlangandan keyin ham saqlanadi', () => {
+    const ambiguousSpecific: ParsedItem = {
+      category: 'noaniq',
+      title: 'Dushanba va juma kitob o\'qish',
+      frequency: 'specific_days',
+      daysOfWeek: [1, 5],
+      quantity: 20,
+      unit: 'sahifa',
+      confidence: 0.85,
+      explanationUz: '',
+      source: 'local-rules',
+    };
+
+    const clarifyPayload: ParsedItem = { ...ambiguousSpecific, category: 'odat' };
+    const res = processEntityCreationFromParsed(clarifyPayload, '2026-03-04', '12:00');
+
+    assert.strictEqual(res.success, true);
+    if (res.success && res.entityType === 'odat') {
+      assert.strictEqual(res.payload.frequency, 'specific_days');
+      assert.deepStrictEqual(res.payload.daysOfWeek, [1, 5]);
+      assert.strictEqual(res.payload.targetQuantity, 20);
+      assert.strictEqual(res.payload.unit, 'sahifa');
+    }
+  });
+
+  test('10. clarify_type oqimi: parserdan chiqqan haqiqiy tokenlar bilan toifa tanlash (End-to-End)', () => {
+    const parsed = parseLocalUzbekIntent("haftasiga 4 kun suzish");
+    assert.strictEqual(parsed.frequency, 'weekly_target');
+    assert.strictEqual(parsed.targetDaysPerWeek, 4);
+
+    // Foydalanuvchi Odat tugmasini tanlaydi
+    const userSelectedHabit: ParsedItem = { ...parsed, category: 'odat' };
+    const res = processEntityCreationFromParsed(userSelectedHabit, '2026-03-04', '12:00');
+
+    assert.strictEqual(res.success, true);
+    if (res.success && res.entityType === 'odat') {
+      assert.strictEqual(res.payload.frequency, 'weekly_target');
+      assert.strictEqual(res.payload.targetDaysPerWeek, 4);
+      assert.strictEqual(res.payload.title, 'Suzish');
+    }
+  });
+
+  test('10. processEntityCreationFromParsed: manfiy va Infinity summa rad etiladi', () => {
+    const negativeParsed: ParsedItem = {
+      category: 'harajat',
+      title: 'Taksi',
+      amount: -15000,
+      currency: 'UZS',
+      confidence: 0.8,
+      explanationUz: '',
+      source: 'local-rules',
+    };
+    const resNegative = processEntityCreationFromParsed(negativeParsed, '2026-03-04', '12:00');
+    assert.strictEqual(resNegative.success, false);
+
+    const infinityParsed: ParsedItem = {
+      category: 'harajat',
+      title: 'Taksi',
+      amount: Infinity,
+      currency: 'UZS',
+      confidence: 0.8,
+      explanationUz: '',
+      source: 'local-rules',
+    };
+    const resInfinity = processEntityCreationFromParsed(infinityParsed, '2026-03-04', '12:00');
+    assert.strictEqual(resInfinity.success, false);
+  });
+
+  test('10. processEntityCreationFromParsed: xarajatda summa bo\'lmaganda aniqlashtirish talab qilinadi', () => {
+    const noAmountParsed: ParsedItem = {
+      category: 'harajat',
+      title: 'Tushlik',
+      amount: null,
+      currency: 'UZS',
+      confidence: 0.8,
+      explanationUz: '',
+      source: 'local-rules',
+    };
+    const res = processEntityCreationFromParsed(noAmountParsed, '2026-03-04', '12:00');
+    assert.strictEqual(res.success, false);
+    if (!res.success) {
+      assert.strictEqual(res.promptClarification, true);
+    }
+  });
+
+  test('10. processEntityCreationFromParsed: noto\'g\'ri sana (2026-02-31) vazifada rad etiladi', () => {
+    const invalidDateTask: ParsedItem = {
+      category: 'vazifa',
+      title: 'Hisobot topshirish',
+      date: '2026-02-31',
+      time: '14:00',
+      confidence: 0.8,
+      explanationUz: '',
+      source: 'local-rules',
+    };
+    const res = processEntityCreationFromParsed(invalidDateTask, '2026-03-04', '12:00');
+    assert.strictEqual(res.success, false);
+    if (!res.success) {
+      assert.ok(res.error.includes('2026-02-31'));
+    }
+  });
+
+  test('10. processEntityCreationFromParsed: noto\'g\'ri sana (2026-02-31) xarajatda rad etiladi', () => {
+    const invalidDateExp: ParsedItem = {
+      category: 'harajat',
+      title: 'Bozorlik',
+      amount: 150000,
+      currency: 'UZS',
+      date: '2026-02-31',
+      time: '14:00',
+      confidence: 0.8,
+      explanationUz: '',
+      source: 'local-rules',
+    };
+    const res = processEntityCreationFromParsed(invalidDateExp, '2026-03-04', '12:00');
+    assert.strictEqual(res.success, false);
+    if (!res.success) {
+      assert.ok(res.error.includes('2026-02-31'));
+    }
+  });
+
+  test('10. processEntityCreationFromParsed: clarificationNeeded mavjud bo\'lganda entity yaratilmaydi', () => {
+    const clarificationItem: ParsedItem = {
+      category: 'vazifa',
+      title: 'Uchrashuv',
+      clarificationNeeded: 'Aniq vaqt yoki joyni kiriting',
+      confidence: 0.8,
+      explanationUz: '',
+      source: 'local-rules',
+    };
+    const res = processEntityCreationFromParsed(clarificationItem, '2026-03-04', '12:00');
+    assert.strictEqual(res.success, false);
+    if (!res.success) {
+      assert.strictEqual(res.promptClarification, true);
+      assert.strictEqual(res.error, 'Aniq vaqt yoki joyni kiriting');
+    }
+  });
+
+  test('10. "boshqa" xarajat kategoriyasi validateParsedItemContract va payload builder dan muvaffaqiyatli o\'tadi', () => {
+    const rawExpense = {
+      category: 'harajat',
+      title: 'Xayriya',
+      amount: 75000,
+      currency: 'UZS',
+      expenseCategory: 'boshqa',
+    };
+
+    const valResult = validateParsedItemContract(rawExpense);
+    assert.strictEqual(valResult.isValid, true);
+    assert.strictEqual(valResult.item?.expenseCategory, 'boshqa');
+
+    const res = processEntityCreationFromParsed(valResult.item!, '2026-03-04', '12:00');
+    assert.strictEqual(res.success, true);
+    if (res.success && res.entityType === 'harajat') {
+      assert.strictEqual(res.payload.category, 'boshqa');
+      assert.strictEqual(res.payload.amount, 75000);
+      assert.strictEqual(res.payload.currency, 'UZS');
+    }
+  });
+
+  test('10. Salomatlik qabulida foydalanuvchi aytmagan doza yoki qabul vaqti qo\'shilmaydi (uydirma yo\'q)', () => {
+    // Foydalanuvchi faqat nomini kiritgan, doza (masalan "5 gram") yoki vaqt aytmagan
+    const rawSupplement: ParsedItem = {
+      category: 'qabul',
+      title: 'Kreatin',
+      dosage: null,
+      timeSlot: null,
+      confidence: 0.9,
+      explanationUz: '',
+      source: 'local-rules',
+    };
+
+    const res = processEntityCreationFromParsed(rawSupplement, '2026-03-04', '12:00');
+    assert.strictEqual(res.success, true);
+    if (res.success && res.entityType === 'qabul') {
+      assert.strictEqual(res.payload.dosage, undefined);
+      assert.strictEqual(res.payload.timeSlot, undefined);
+      assert.strictEqual(res.payload.habitType, 'supplement_health');
     }
   });
 

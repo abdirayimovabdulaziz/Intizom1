@@ -1,4 +1,4 @@
-import { ParsedItem, ExpenseCategory, Currency, HabitFrequency, HabitType } from '../types';
+import { ParsedItem, ExpenseCategory, EXPENSE_CATEGORIES, Currency, HabitFrequency, HabitType } from '../types';
 import {
   getDateStringInTimezone,
   getTimeStringInTimezone,
@@ -429,7 +429,6 @@ export function validateParsedItemContract(
 
   // Harajat specific validation
   let amount: number | null = null;
-  const validExpenseCategories: ExpenseCategory[] = ['oziq_ovqat', 'transport', 'sport', 'salomatlik', 'talim', 'shaxsiy'];
   let expenseCategory: ExpenseCategory | null = null;
 
   if (raw.category === 'harajat') {
@@ -444,7 +443,7 @@ export function validateParsedItemContract(
     }
 
     if (raw.expenseCategory) {
-      if (!validExpenseCategories.includes(raw.expenseCategory)) {
+      if (!(EXPENSE_CATEGORIES as readonly string[]).includes(raw.expenseCategory)) {
         errors.push(`Xarajat toifasi noma'lum: ${raw.expenseCategory}`);
       } else {
         expenseCategory = raw.expenseCategory;
@@ -1074,8 +1073,26 @@ export function buildExpenseCreatePayload(
     return { success: false, error: "Valyuta turi noto'g'ri yoki noma'lum." };
   }
 
-  const validCats: ExpenseCategory[] = ['oziq_ovqat', 'transport', 'sport', 'salomatlik', 'talim', 'shaxsiy'];
-  const category = parsed.expenseCategory && validCats.includes(parsed.expenseCategory) ? parsed.expenseCategory : 'shaxsiy';
+  if (parsed.date !== undefined && parsed.date !== null && String(parsed.date).trim() !== '') {
+    if (!isValidYMD(String(parsed.date).trim())) {
+      return { success: false, error: `Kiritilgan sana haqiqiy emas: "${parsed.date}"` };
+    }
+  }
+
+  if (parsed.time !== undefined && parsed.time !== null && String(parsed.time).trim() !== '') {
+    const timeStr = String(parsed.time).trim();
+    const timeMatch = timeStr.match(/^(\d{1,2}):(\d{2})$/);
+    if (!timeMatch) {
+      return { success: false, error: `Kiritilgan vaqt noto'g'ri: "${parsed.time}"` };
+    }
+    const h = parseInt(timeMatch[1], 10);
+    const m = parseInt(timeMatch[2], 10);
+    if (h < 0 || h > 23 || m < 0 || m > 59) {
+      return { success: false, error: `Kiritilgan vaqt noto'g'ri: "${parsed.time}"` };
+    }
+  }
+
+  const category: ExpenseCategory = parsed.expenseCategory && (EXPENSE_CATEGORIES as readonly string[]).includes(parsed.expenseCategory) ? parsed.expenseCategory : 'shaxsiy';
 
   const date = parsed.date && isValidYMD(parsed.date) ? parsed.date : defaultDate;
 
@@ -1106,6 +1123,25 @@ export function buildTaskCreatePayload(
     return { success: false, error: "Vazifa nomi kiritilmagan." };
   }
 
+  if (parsed.date !== undefined && parsed.date !== null && String(parsed.date).trim() !== '') {
+    if (!isValidYMD(String(parsed.date).trim())) {
+      return { success: false, error: `Kiritilgan sana haqiqiy emas: "${parsed.date}"` };
+    }
+  }
+
+  if (parsed.time !== undefined && parsed.time !== null && String(parsed.time).trim() !== '') {
+    const timeStr = String(parsed.time).trim();
+    const timeMatch = timeStr.match(/^(\d{1,2}):(\d{2})$/);
+    if (!timeMatch) {
+      return { success: false, error: `Kiritilgan vaqt noto'g'ri: "${parsed.time}"` };
+    }
+    const h = parseInt(timeMatch[1], 10);
+    const m = parseInt(timeMatch[2], 10);
+    if (h < 0 || h > 23 || m < 0 || m > 59) {
+      return { success: false, error: `Kiritilgan vaqt noto'g'ri: "${parsed.time}"` };
+    }
+  }
+
   const date = parsed.date && isValidYMD(parsed.date) ? parsed.date : defaultDate;
 
   return {
@@ -1119,5 +1155,124 @@ export function buildTaskCreatePayload(
       priority: 'medium',
       source: 'bot',
     },
+  };
+}
+
+export type ProcessEntityResult =
+  | { success: true; entityType: 'harajat'; payload: ExpenseCreatePayload; feedbackText: string }
+  | { success: true; entityType: 'odat'; payload: HabitCreatePayload; feedbackText: string }
+  | { success: true; entityType: 'qabul'; payload: HabitCreatePayload; feedbackText: string; markDoneToday?: boolean }
+  | { success: true; entityType: 'vazifa' | 'uchrashuv'; payload: TaskCreatePayload; feedbackText: string }
+  | { success: false; error: string; promptClarification?: boolean };
+
+/**
+ * Universal entity creation processor:
+ * Used by both confirm_create and clarify_type flows to enforce strict production validation.
+ */
+export function processEntityCreationFromParsed(
+  parsed: ParsedItem & { markDoneToday?: boolean },
+  defaultDate: string,
+  defaultTime: string
+): ProcessEntityResult {
+  if (parsed.isIncomeBlocked) {
+    return {
+      success: false,
+      error: "ℹ️ Daromad hisobi: Hozircha ilovada faqat xarajatlar tahlili mavjud. Daromadlar keyingi versiyalarda qo'shiladi.",
+    };
+  }
+
+  if (parsed.isIntervalBlocked) {
+    return {
+      success: false,
+      error: "⚠️ Kunora takrorlanish jadvali hozircha avtomatik qo'llab-quvvatlanmaydi. Iltimos, boshqa jadval tanlang.",
+    };
+  }
+
+  if (parsed.isMultipleActionsBlocked) {
+    return {
+      success: false,
+      error: "⚠️ Bir nechta amal aniqlandi. Iltimos, har bir amalni alohida xabar sifatida yuboring.",
+    };
+  }
+
+  if (parsed.clarificationNeeded) {
+    return {
+      success: false,
+      error: parsed.clarificationNeeded,
+      promptClarification: true,
+    };
+  }
+
+  if (parsed.category === 'harajat') {
+    if (parsed.amount === undefined || parsed.amount === null) {
+      return {
+        success: false,
+        error: `Iltimos, "${parsed.title}" uchun xarajat summasini kiriting (masalan: "${parsed.title} 45000 so'm").`,
+        promptClarification: true,
+      };
+    }
+
+    const expBuild = buildExpenseCreatePayload(parsed, defaultDate, defaultTime);
+    if (!expBuild.success) {
+      return { success: false, error: expBuild.error, promptClarification: true };
+    }
+
+    const moneyStr = formatMoney(expBuild.payload.amount, expBuild.payload.currency);
+    return {
+      success: true,
+      entityType: 'harajat',
+      payload: expBuild.payload,
+      feedbackText: `💸 Xarajat saqlandi: **${moneyStr}** - "${expBuild.payload.title}"`,
+    };
+  }
+
+  if (parsed.category === 'qabul') {
+    const habitBuild = buildHabitCreatePayload(parsed);
+    if (!habitBuild.success) {
+      return { success: false, error: habitBuild.error, promptClarification: true };
+    }
+
+    return {
+      success: true,
+      entityType: 'qabul',
+      payload: habitBuild.payload,
+      markDoneToday: parsed.markDoneToday,
+      feedbackText: `💊 Salomatlik qabuli saqlandi: **"${habitBuild.payload.title}"**`,
+    };
+  }
+
+  if (parsed.category === 'odat') {
+    const habitBuild = buildHabitCreatePayload(parsed);
+    if (!habitBuild.success) {
+      return { success: false, error: habitBuild.error, promptClarification: true };
+    }
+
+    return {
+      success: true,
+      entityType: 'odat',
+      payload: habitBuild.payload,
+      feedbackText: `🔁 Odat saqlandi: **"${habitBuild.payload.title}"**`,
+    };
+  }
+
+  if (parsed.category === 'vazifa' || parsed.category === 'uchrashuv') {
+    const taskBuild = buildTaskCreatePayload(parsed, defaultDate);
+    if (!taskBuild.success) {
+      return { success: false, error: taskBuild.error, promptClarification: true };
+    }
+
+    const dateLabel = formatUzbekDateLabel(taskBuild.payload.date, taskBuild.payload.time);
+    return {
+      success: true,
+      entityType: taskBuild.payload.category,
+      payload: taskBuild.payload,
+      feedbackText: `✅ ${taskBuild.payload.category === 'uchrashuv' ? 'Uchrashuv' : 'Vazifa'} saqlandi: **"${taskBuild.payload.title}"** (${dateLabel})`,
+    };
+  }
+
+  return {
+    success: false,
+    error: `Noma'lum kategoriya: "${parsed.category}". Iltimos, toifani aniqlashtiring.`,
+    promptClarification: true,
   };
 }
