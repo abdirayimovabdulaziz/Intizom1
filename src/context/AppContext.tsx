@@ -4,6 +4,8 @@ import {
   Habit,
   Goal,
   Expense,
+  Activity,
+  ActivityCreatePayload,
   ChatMessage,
   UserSettings,
   MiniAppTab,
@@ -22,6 +24,7 @@ import {
   buildHabitCreatePayload,
   buildExpenseCreatePayload,
   buildTaskCreatePayload,
+  buildActivityCreatePayload,
   processEntityCreationFromParsed,
 } from '../utils/uzbekNlp';
 import { triggerHaptic } from '../utils/telegram';
@@ -32,6 +35,8 @@ import {
   getDateStringInTimezone,
   getDayOfWeekInTimezone,
   getIanaTimezone,
+  applyHabitCompletionStatus,
+  validateActivity,
 } from '../utils/domainCalculations';
 import {
   domainReducer,
@@ -49,6 +54,7 @@ interface AppContextType {
   habits: Habit[];
   goals: Goal[];
   expenses: Expense[];
+  activities: Activity[];
   messages: ChatMessage[];
   settings: UserSettings;
   displayMode: AppDisplayMode;
@@ -70,6 +76,9 @@ interface AppContextType {
   logHabitQuantity: (id: string, amount: number) => void;
   deleteHabit: (id: string, permanent?: boolean) => void;
   restoreHabit: (id: string) => void;
+  addActivity: (payload: ActivityCreatePayload) => Activity;
+  updateActivity: (id: string, updates: Partial<Activity>) => void;
+  deleteActivity: (id: string) => void;
   addGoal: (goal: Omit<Goal, 'id' | 'status'>) => Goal;
   updateGoal: (id: string, updates: Partial<Goal>) => void;
   updateGoalProgress: (id: string, deltaAmount: number) => void;
@@ -103,6 +112,7 @@ const STORAGE_KEY_TASKS = 'kunlik_yordamchi_tasks_clean_v1';
 const STORAGE_KEY_HABITS = 'kunlik_yordamchi_habits_clean_v1';
 const STORAGE_KEY_GOALS = 'kunlik_yordamchi_goals_clean_v1';
 const STORAGE_KEY_EXPENSES = 'kunlik_yordamchi_expenses_clean_v1';
+const STORAGE_KEY_ACTIVITIES = 'kunlik_yordamchi_activities_clean_v1';
 const STORAGE_KEY_MSGS = 'kunlik_yordamchi_messages_clean_v1';
 const STORAGE_KEY_SETTINGS = 'kunlik_yordamchi_settings_clean_v1';
 
@@ -210,6 +220,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   });
 
+  const [activities, setActivities] = useState<Activity[]>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_ACTIVITIES);
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
   const [messages, setMessages] = useState<ChatMessage[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY_MSGS);
@@ -240,6 +259,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY_EXPENSES, JSON.stringify(expenses));
   }, [expenses]);
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEY_ACTIVITIES, JSON.stringify(activities));
+  }, [activities]);
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY_MSGS, JSON.stringify(messages));
@@ -505,6 +528,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       habits,
       goals,
       expenses,
+      activities,
       settings,
     };
     const jsonStr = JSON.stringify(backupData, null, 2);
@@ -515,6 +539,115 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     a.download = `kunlik-yordamchi-backup-${formatDateYMD(new Date())}.json`;
     a.click();
     URL.revokeObjectURL(url);
+  };
+
+  // Activity methods
+  const addActivity = (payload: ActivityCreatePayload): Activity => {
+    const val = validateActivity(payload, activeTodayStr);
+    if (!val.isValid) {
+      triggerHaptic('error');
+      throw new Error(val.error || "Faoliyat ma'lumotlari noto'g'ri");
+    }
+
+    const activity: Activity = {
+      id: generateEntityId('act'),
+      title: payload.title.trim(),
+      localDate: payload.localDate,
+      time: payload.time,
+      category: payload.category || 'boshqa',
+      durationMinutes: payload.durationMinutes,
+      quantity: payload.quantity,
+      unit: payload.unit,
+      notes: payload.notes,
+      linkedHabitId: payload.linkedHabitId,
+      linkedTaskId: payload.linkedTaskId,
+      source: payload.source || 'manual',
+      createdAt: new Date().toISOString(),
+    };
+
+    if (activity.linkedHabitId) {
+      domainDispatch({
+        type: 'SET_HABIT_COMPLETION_TODAY',
+        habitId: activity.linkedHabitId,
+        completed: true,
+        dateStr: activity.localDate,
+        timestamp: activity.createdAt,
+      });
+    }
+
+    setActivities(prev => [activity, ...prev]);
+    triggerHaptic('light');
+    return activity;
+  };
+
+  const updateActivity = (id: string, updates: Partial<Activity>) => {
+    const existing = activities.find(a => a.id === id);
+    if (!existing) return;
+
+    if (updates.localDate && updates.localDate > activeTodayStr) {
+      triggerHaptic('error');
+      return;
+    }
+
+    const oldHabitId = existing.linkedHabitId;
+    const oldDate = existing.localDate;
+    const newHabitId = updates.linkedHabitId !== undefined ? updates.linkedHabitId : oldHabitId;
+    const newDate = updates.localDate !== undefined ? updates.localDate : oldDate;
+
+    // If habit linkage or date changed, reverse old if no other activity linked to it on that date
+    if (oldHabitId && (oldHabitId !== newHabitId || oldDate !== newDate)) {
+      const otherLinked = activities.some(
+        a => a.id !== id && a.linkedHabitId === oldHabitId && a.localDate === oldDate
+      );
+      if (!otherLinked) {
+        domainDispatch({
+          type: 'SET_HABIT_COMPLETION_TODAY',
+          habitId: oldHabitId,
+          completed: false,
+          dateStr: oldDate,
+          timestamp: new Date().toISOString(),
+        });
+      }
+    }
+
+    // Apply new habit completion
+    if (newHabitId && (newHabitId !== oldHabitId || oldDate !== newDate)) {
+      domainDispatch({
+        type: 'SET_HABIT_COMPLETION_TODAY',
+        habitId: newHabitId,
+        completed: true,
+        dateStr: newDate,
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    setActivities(prev =>
+      prev.map(a => (a.id === id ? { ...a, ...updates } : a))
+    );
+    triggerHaptic('light');
+  };
+
+  const deleteActivity = (id: string) => {
+    const existing = activities.find(a => a.id === id);
+    if (!existing) return;
+
+    if (existing.linkedHabitId) {
+      const otherLinked = activities.some(
+        a => a.id !== id && a.linkedHabitId === existing.linkedHabitId && a.localDate === existing.localDate
+      );
+      if (!otherLinked) {
+        domainDispatch({
+          type: 'SET_HABIT_COMPLETION_TODAY',
+          habitId: existing.linkedHabitId,
+          completed: false,
+          dateStr: existing.localDate,
+          timestamp: new Date().toISOString(),
+        });
+      }
+    }
+
+    setActivities(prev => prev.filter(a => a.id !== id));
+    triggerHaptic('warning');
   };
 
   // Expenses methods
@@ -564,6 +697,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setExpenses(data.expenses);
         loadedCount += data.expenses.length;
       }
+
+      // Activities import with validation, keeping existing if absent in backup
+      if ('activities' in data && Array.isArray(data.activities)) {
+        const validActivities: Activity[] = [];
+        for (const act of data.activities) {
+          if (
+            act &&
+            typeof act === 'object' &&
+            typeof act.id === 'string' &&
+            typeof act.title === 'string' &&
+            typeof act.localDate === 'string'
+          ) {
+            validActivities.push(act);
+          }
+        }
+        setActivities(validActivities);
+        loadedCount += validActivities.length;
+      }
+
       if (data.settings && typeof data.settings === 'object') {
         setSettings(prev => ({ ...prev, ...data.settings }));
       }
@@ -1367,6 +1519,44 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             ],
           },
         ]);
+      } else if (payload.category === 'faoliyat') {
+        const buildRes = buildActivityCreatePayload(payload, activeTodayStr, timeStr);
+        if (!buildRes.success) {
+          setMessages(prev => [
+            ...prev,
+            {
+              id: generateEntityId('conf-err'),
+              sender: 'bot',
+              text: `❌ Faoliyatni saqlashda xatolik: ${buildRes.error}`,
+              timestamp: timeStr,
+            },
+          ]);
+          setMessages(prev => prev.map(m => (m.id === messageId ? { ...m, actions: undefined } : m)));
+          return;
+        }
+
+        const createdAct = addActivity(buildRes.payload);
+        const durPart = createdAct.durationMinutes ? `, ${createdAct.durationMinutes} daqiqa` : '';
+        const qtyPart = createdAct.quantity && createdAct.unit ? `, ${createdAct.quantity} ${createdAct.unit}` : '';
+
+        setMessages(prev => [
+          ...prev,
+          {
+            id: generateEntityId('conf'),
+            sender: 'bot',
+            text: `🏃 Bajarilgan faoliyat saqlandi: **"${createdAct.title}"** (${formatUzbekDateLabel(createdAct.localDate)}${durPart}${qtyPart})`,
+            timestamp: timeStr,
+            actions: [
+              {
+                id: 'open-cal',
+                label: '📅 Kalendarda ko\'rish',
+                action: 'open_miniapp',
+                payload: { tab: 'kalendar' },
+                variant: 'primary',
+              },
+            ],
+          },
+        ]);
       }
 
       setMessages(prev =>
@@ -1435,6 +1625,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             text: `🔁 Odat sifatida saqlandi: "${createdHabit.title}" (${freqDesc})`,
             timestamp: timeStr,
             actions: [{ id: 'opn', label: '📱 Mini App\'ni ochish', action: 'open_miniapp', variant: 'primary' }],
+          },
+        ]);
+      } else if (res.entityType === 'faoliyat') {
+        const createdAct = addActivity(res.payload);
+        const durPart = createdAct.durationMinutes ? `, ${createdAct.durationMinutes} daqiqa` : '';
+        const qtyPart = createdAct.quantity && createdAct.unit ? `, ${createdAct.quantity} ${createdAct.unit}` : '';
+        setMessages(prev => [
+          ...prev,
+          {
+            id: generateEntityId('res'),
+            sender: 'bot',
+            text: `🏃 Bajarilgan faoliyat saqlandi: "${createdAct.title}" (${formatUzbekDateLabel(createdAct.localDate)}${durPart}${qtyPart})`,
+            timestamp: timeStr,
+            actions: [{ id: 'opn', label: '📅 Kalendarda ko\'rish', action: 'open_miniapp', payload: { tab: 'kalendar' }, variant: 'primary' }],
           },
         ]);
       }
@@ -1612,6 +1816,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setTasks(defaultTasks);
     domainDispatch({ type: 'RESET_DOMAIN', habits: defaultHabits, goals: defaultGoals });
     setExpenses(defaultExpenses);
+    setActivities([]);
     setMessages(defaultMessages);
     setSettings(defaultSettings);
   };
@@ -1620,12 +1825,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setTasks([]);
     domainDispatch({ type: 'RESET_DOMAIN', habits: [], goals: [] });
     setExpenses([]);
+    setActivities([]);
     setMessages([]);
     try {
       localStorage.removeItem(STORAGE_KEY_TASKS);
       localStorage.removeItem(STORAGE_KEY_HABITS);
       localStorage.removeItem(STORAGE_KEY_GOALS);
       localStorage.removeItem(STORAGE_KEY_EXPENSES);
+      localStorage.removeItem(STORAGE_KEY_ACTIVITIES);
       localStorage.removeItem(STORAGE_KEY_MSGS);
     } catch {
       // ignore
@@ -1649,6 +1856,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         habits,
         goals,
         expenses,
+        activities,
         messages,
         settings,
         displayMode,
@@ -1670,6 +1878,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         logHabitQuantity,
         deleteHabit,
         restoreHabit,
+        addActivity,
+        updateActivity,
+        deleteActivity,
         addGoal,
         updateGoal,
         updateGoalProgress,

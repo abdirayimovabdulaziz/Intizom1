@@ -1,4 +1,4 @@
-import { Habit, Goal, Task, HabitFrequency } from '../types';
+import { Habit, Goal, Task, HabitFrequency, Activity, ActivityCategory, ACTIVITY_CATEGORIES } from '../types';
 
 /**
  * Normalizes timezone string to a valid IANA timezone identifier
@@ -619,6 +619,11 @@ export type HabitIntakeDecision =
       action: 'create_new';
       shouldMarkCompletion: boolean;
       feedbackText: string;
+    }
+  | {
+      action: 'error';
+      shouldMarkCompletion: false;
+      feedbackText: string;
     };
 
 /**
@@ -626,23 +631,15 @@ export type HabitIntakeDecision =
  *
  * Rules:
  * 1. Archived habits (isArchived === true) are never automatically selected.
- * 2. If targetHabitId is provided, authoritative match on active habits:
- *    - If markDoneToday: 'mark_completed' (idempotent, checks alreadyCompleted)
- *    - If not markDoneToday: 'already_exists'
- * 3. If no targetHabitId:
- *    - Check exact active matches (case/whitespace/apostrophe normalized).
- *    - If > 1 exact matches: 'disambiguation_needed' (never arbitrarily pick one)
- *    - If 1 exact match:
- *        * If markDoneToday: 'mark_completed'
- *        * If not markDoneToday: 'already_exists' (do not create duplicate, do not mark completed)
- *    - If 0 exact matches:
- *        * Check partial / token matches on active habits.
- *        * If > 1 candidates: 'disambiguation_needed' (never arbitrarily pick one)
- *        * If 1 candidate:
- *            - If markDoneToday: 'mark_completed'
- *            - If not markDoneToday: 'already_exists'
- *        * If 0 candidates:
- *            - 'create_new' (with shouldMarkCompletion = !!markDoneToday)
+ * 2. If targetHabitId is provided, authoritative match on active habits only:
+ *    - If found: mark_completed (idempotent) or already_exists
+ *    - If not found or archived: return explicit error action, NEVER fallback to another habit
+ * 3. Exact matches:
+ *    - If 1 exact match: mark_completed or already_exists
+ *    - If >1 exact matches: disambiguation_needed
+ * 4. Partial matches:
+ *    - Even if length === 1: disambiguation_needed (never auto-mark without explicit confirmation)
+ * 5. No matches: create_new
  */
 export function calculateHabitIntakeDecision(
   allHabits: Habit[],
@@ -654,26 +651,31 @@ export function calculateHabitIntakeDecision(
   // 1. Authoritative habit ID
   if (request.targetHabitId) {
     const target = activeHabits.find(h => h.id === request.targetHabitId);
-    if (target) {
-      if (request.markDoneToday) {
-        const alreadyCompleted = !!target.history[dateStr]?.completed;
-        return {
-          action: 'mark_completed',
-          habit: target,
-          alreadyCompleted,
-          shouldMarkCompletion: true,
-          feedbackText: alreadyCompleted
-            ? `✅ "${target.title}" bugun allaqachon bajarilgan!`
-            : `✅ Qabul qilindi! "${target.title}" bugungi ro'yxatda bajarilgan deb belgilandi!`,
-        };
-      } else {
-        return {
-          action: 'already_exists',
-          habit: target,
-          shouldMarkCompletion: false,
-          feedbackText: `ℹ️ "${target.title}" odati allaqachon ro'yxatingizda mavjud.`,
-        };
-      }
+    if (!target) {
+      return {
+        action: 'error',
+        shouldMarkCompletion: false,
+        feedbackText: "❌ Belgilangan odat topilmadi yoki arxivlangan.",
+      };
+    }
+    if (request.markDoneToday) {
+      const alreadyCompleted = !!target.history[dateStr]?.completed;
+      return {
+        action: 'mark_completed',
+        habit: target,
+        alreadyCompleted,
+        shouldMarkCompletion: true,
+        feedbackText: alreadyCompleted
+          ? `✅ "${target.title}" bugun allaqachon bajarilgan!`
+          : `✅ Qabul qilindi! "${target.title}" bugungi ro'yxatda bajarilgan deb belgilandi!`,
+      };
+    } else {
+      return {
+        action: 'already_exists',
+        habit: target,
+        shouldMarkCompletion: false,
+        feedbackText: `ℹ️ "${target.title}" odati allaqachon ro'yxatingizda mavjud.`,
+      };
     }
   }
 
@@ -728,36 +730,14 @@ export function calculateHabitIntakeDecision(
     return reqTokens.some(t => hTokens.includes(t));
   });
 
-  if (partialMatches.length > 1) {
+  // Partial match policy: Even if only 1 partial match exists, require explicit user confirmation!
+  if (partialMatches.length >= 1) {
     return {
       action: 'disambiguation_needed',
       candidates: partialMatches,
       shouldMarkCompletion: false,
-      feedbackText: `🔍 "${request.title}" bo'yicha bir nechta mos odat topildi. Iltimos, aynan qaysi birini nazarda tutganingizni tanlang:`,
+      feedbackText: `🔍 "${request.title}" bo'yicha o'xshash odat topildi. Iltimos, tasdiqlang:`,
     };
-  }
-
-  if (partialMatches.length === 1) {
-    const matched = partialMatches[0];
-    if (request.markDoneToday) {
-      const alreadyCompleted = !!matched.history[dateStr]?.completed;
-      return {
-        action: 'mark_completed',
-        habit: matched,
-        alreadyCompleted,
-        shouldMarkCompletion: true,
-        feedbackText: alreadyCompleted
-          ? `✅ "${matched.title}" bugun allaqachon bajarilgan!`
-          : `✅ Qabul qilindi! "${matched.title}" bugungi ro'yxatda bajarilgan deb belgilandi!`,
-      };
-    } else {
-      return {
-        action: 'already_exists',
-        habit: matched,
-        shouldMarkCompletion: false,
-        feedbackText: `ℹ️ "${matched.title}" odati allaqachon ro'yxatingizda mavjud.`,
-      };
-    }
   }
 
   // 4. No matches: create new
@@ -873,4 +853,217 @@ export function getTimeStringInTimezone(date: Date = new Date(), timezone: strin
     hour12: false,
   });
   return formatter.format(date);
+}
+
+/**
+ * Calculates previous occurrence of a target day of week (1=Monday ... 7=Sunday)
+ * relative to refDateYMD. Always returns a past date (< refDateYMD).
+ */
+export function getPreviousDayOfWeekYMD(refDateYMD: string, targetDay: number): string {
+  const currentDay = getDayOfWeekFromYMD(refDateYMD);
+  let diff = (currentDay - targetDay + 7) % 7;
+  if (diff === 0) diff = 7;
+  return addDaysToYMD(refDateYMD, -diff);
+}
+
+/**
+ * Validates Activity payload against domain rules:
+ * - Title is non-empty string
+ * - localDate is valid YMD and NOT in the future (<= todayStr)
+ * - category is a recognized ActivityCategory
+ * - durationMinutes, if present, is a positive finite number (> 0)
+ * - quantity, if present, is a positive finite number (> 0)
+ */
+export function validateActivity(
+  activity: Partial<Activity>,
+  todayStr: string
+): { isValid: boolean; error?: string } {
+  if (!activity || typeof activity !== 'object') {
+    return { isValid: false, error: "Faoliyat ma'lumotlari kiritilmagan." };
+  }
+
+  const title = typeof activity.title === 'string' ? activity.title.trim() : '';
+  if (!title) {
+    return { isValid: false, error: "Faoliyat sarlavhasi (nomi) kiritilishi shart." };
+  }
+
+  const localDate = typeof activity.localDate === 'string' ? activity.localDate.trim() : '';
+  if (!localDate || !isValidYMD(localDate)) {
+    return { isValid: false, error: `Kiritilgan sana yaroqsiz formatda (YYYY-MM-DD bo'lishi kerak): "${activity.localDate}"` };
+  }
+
+  // Bajarilgan faoliyat kelajak sanasiga kiritilishi mumkin emas
+  if (localDate > todayStr) {
+    return { isValid: false, error: `Bajarilgan faoliyat kelajak sanasiga (${localDate}) kiritilishi mumkin emas.` };
+  }
+
+  if (activity.category) {
+    if (!ACTIVITY_CATEGORIES.includes(activity.category as ActivityCategory)) {
+      return { isValid: false, error: `Noma'lum faoliyat toifasi: "${activity.category}"` };
+    }
+  }
+
+  if (activity.durationMinutes !== undefined && activity.durationMinutes !== null) {
+    if (typeof activity.durationMinutes !== 'number' || !Number.isFinite(activity.durationMinutes) || activity.durationMinutes <= 0) {
+      return { isValid: false, error: "Davomiylik (durationMinutes) musbat chekli son bo'lishi shart." };
+    }
+  }
+
+  if (activity.quantity !== undefined && activity.quantity !== null) {
+    if (typeof activity.quantity !== 'number' || !Number.isFinite(activity.quantity) || activity.quantity <= 0) {
+      return { isValid: false, error: "Miqdor (quantity) musbat chekli son bo'lishi shart." };
+    }
+  }
+
+  return { isValid: true };
+}
+
+export interface CalendarPeriodSummary {
+  period: 'hafta' | 'oy' | 'yil';
+  startDate: string;
+  endDate: string;
+  totalActivities: number;
+  activeDaysCount: number;
+  totalActiveDaysCount: number;
+  categoryBreakdown: Record<ActivityCategory, { count: number; totalDurationMinutes: number }>;
+  totalDurationMinutes: number;
+  durationsCount: number;
+  unitQuantities: Record<string, number>;
+  standaloneHabitCompletions: number;
+  completedTasksCount: number;
+  totalEventsCount: number;
+}
+
+/**
+ * Returns exact start and end dates (YYYY-MM-DD) for a given calendar period
+ */
+export function getCalendarPeriodBounds(
+  period: 'hafta' | 'oy' | 'yil',
+  refDateStr: string
+): { startDate: string; endDate: string } {
+  const parts = refDateStr.split('-').map(Number);
+  const year = parts[0];
+  const month = parts[1];
+
+  if (period === 'hafta') {
+    const dayOfWeek = getDayOfWeekFromYMD(refDateStr); // 1 = Monday, 7 = Sunday
+    const startDate = addDaysToYMD(refDateStr, -(dayOfWeek - 1));
+    const endDate = addDaysToYMD(refDateStr, 7 - dayOfWeek);
+    return { startDate, endDate };
+  }
+
+  if (period === 'oy') {
+    const startDate = `${year}-${String(month).padStart(2, '0')}-01`;
+    const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+    const endDate = `${year}-${String(month).padStart(2, '0')}-${String(daysInMonth).padStart(2, '0')}`;
+    return { startDate, endDate };
+  }
+
+  return {
+    startDate: `${year}-01-01`,
+    endDate: `${year}-12-31`,
+  };
+}
+
+/**
+ * Deterministic period summary calculation:
+ * - Activity count, distinct active days
+ * - Category breakdown with counts and durations
+ * - Total duration of entries with duration (no fabricated duration!)
+ * - Quantities grouped strictly by unit (never adding minutes, pages, and km together)
+ * - Standalone habit completions deduplicated against linked activities
+ */
+export function calculateCalendarPeriodSummary(
+  activities: Activity[],
+  habits: Habit[],
+  tasks: Task[],
+  period: 'hafta' | 'oy' | 'yil',
+  refDateStr: string
+): CalendarPeriodSummary {
+  const { startDate, endDate } = getCalendarPeriodBounds(period, refDateStr);
+
+  const periodActivities = activities.filter(
+    a => a.localDate >= startDate && a.localDate <= endDate
+  );
+
+  const totalActivities = periodActivities.length;
+  const activityDaysSet = new Set<string>();
+  const totalActiveDaysSet = new Set<string>();
+
+  const categoryBreakdown: Record<ActivityCategory, { count: number; totalDurationMinutes: number }> = {
+    sport: { count: 0, totalDurationMinutes: 0 },
+    salomatlik: { count: 0, totalDurationMinutes: 0 },
+    talim: { count: 0, totalDurationMinutes: 0 },
+    ish: { count: 0, totalDurationMinutes: 0 },
+    shaxsiy: { count: 0, totalDurationMinutes: 0 },
+    boshqa: { count: 0, totalDurationMinutes: 0 },
+  };
+
+  let totalDurationMinutes = 0;
+  let durationsCount = 0;
+  const unitQuantities: Record<string, number> = {};
+
+  for (const act of periodActivities) {
+    activityDaysSet.add(act.localDate);
+    totalActiveDaysSet.add(act.localDate);
+
+    const cat: ActivityCategory = (ACTIVITY_CATEGORIES as readonly string[]).includes(act.category)
+      ? act.category
+      : 'boshqa';
+
+    categoryBreakdown[cat].count += 1;
+
+    if (typeof act.durationMinutes === 'number' && Number.isFinite(act.durationMinutes) && act.durationMinutes > 0) {
+      categoryBreakdown[cat].totalDurationMinutes += act.durationMinutes;
+      totalDurationMinutes += act.durationMinutes;
+      durationsCount += 1;
+    }
+
+    if (typeof act.quantity === 'number' && Number.isFinite(act.quantity) && act.quantity > 0 && act.unit) {
+      const u = act.unit.trim().toLowerCase();
+      unitQuantities[u] = (unitQuantities[u] || 0) + act.quantity;
+    }
+  }
+
+  // Standalone habit completions:
+  // Count habit completions that do NOT have a corresponding linked activity on the same date
+  let standaloneHabitCompletions = 0;
+  for (const h of habits) {
+    if (!h.history) continue;
+    for (const [dateStr, record] of Object.entries(h.history)) {
+      if (record && record.completed && dateStr >= startDate && dateStr <= endDate) {
+        const hasLinkedActivity = periodActivities.some(
+          a => a.localDate === dateStr && a.linkedHabitId === h.id
+        );
+        if (!hasLinkedActivity) {
+          standaloneHabitCompletions += 1;
+          totalActiveDaysSet.add(dateStr);
+        }
+      }
+    }
+  }
+
+  // Completed tasks count in period
+  const completedTasks = tasks.filter(
+    t => t.status === 'completed' && t.date && t.date >= startDate && t.date <= endDate
+  );
+  completedTasks.forEach(t => {
+    if (t.date) totalActiveDaysSet.add(t.date);
+  });
+
+  return {
+    period,
+    startDate,
+    endDate,
+    totalActivities,
+    activeDaysCount: activityDaysSet.size,
+    totalActiveDaysCount: totalActiveDaysSet.size,
+    categoryBreakdown,
+    totalDurationMinutes,
+    durationsCount,
+    unitQuantities,
+    standaloneHabitCompletions,
+    completedTasksCount: completedTasks.length,
+    totalEventsCount: totalActivities + standaloneHabitCompletions + completedTasks.length,
+  };
 }

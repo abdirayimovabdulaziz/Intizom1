@@ -623,6 +623,131 @@ async function runTests() {
     }
   });
 
+  test('11. Faoliyat NLP: "Bugun zalga bordim, 1 soat shug\'ullandim"', () => {
+    const fixedNow = new Date('2026-10-30T10:00:00Z'); // Juma
+    const parsed = parseLocalUzbekIntent("Bugun zalga bordim, 1 soat shug'ullandim", {
+      referenceDate: fixedNow,
+      timezone: 'Asia/Tashkent',
+    });
+
+    assert.strictEqual(parsed.category, 'faoliyat');
+    assert.strictEqual(parsed.activityCategory, 'sport');
+    assert.strictEqual(parsed.durationMinutes, 60);
+    assert.strictEqual(parsed.date, '2026-10-30');
+  });
+
+  test('11. Faoliyat NLP: "Kecha basseynda 40 daqiqa suzdim"', () => {
+    const fixedNow = new Date('2026-10-30T10:00:00Z'); // 2026-10-30
+    const parsed = parseLocalUzbekIntent("Kecha basseynda 40 daqiqa suzdim", {
+      referenceDate: fixedNow,
+      timezone: 'Asia/Tashkent',
+    });
+
+    assert.strictEqual(parsed.category, 'faoliyat');
+    assert.strictEqual(parsed.activityCategory, 'sport');
+    assert.strictEqual(parsed.durationMinutes, 40);
+    assert.strictEqual(parsed.date, '2026-10-29'); // Kecha!
+  });
+
+  test('11. Faoliyat NLP: "Kecha do\'stlar bilan tog\'ga chiqib keldik"', () => {
+    const fixedNow = new Date('2026-10-30T10:00:00Z');
+    const parsed = parseLocalUzbekIntent("Kecha do'stlar bilan tog'ga chiqib keldik", {
+      referenceDate: fixedNow,
+      timezone: 'Asia/Tashkent',
+    });
+
+    assert.strictEqual(parsed.category, 'faoliyat');
+    assert.strictEqual(parsed.date, '2026-10-29');
+  });
+
+  test('11. Faoliyat NLP: "Bugun 30 bet kitob o\'qidim"', () => {
+    const fixedNow = new Date('2026-10-30T10:00:00Z');
+    const parsed = parseLocalUzbekIntent("Bugun 30 bet kitob o'qidim", {
+      referenceDate: fixedNow,
+      timezone: 'Asia/Tashkent',
+    });
+
+    assert.strictEqual(parsed.category, 'faoliyat');
+    assert.strictEqual(parsed.activityCategory, 'talim');
+    assert.strictEqual(parsed.quantity, 30);
+    assert.strictEqual(parsed.unit, 'bet');
+    assert.strictEqual(parsed.date, '2026-10-30');
+  });
+
+  test('11. Faoliyat NLP: "Ertaga zalga boraman" kelajak reja bo\'lib qoladi (vazifa)', () => {
+    const fixedNow = new Date('2026-10-30T10:00:00Z');
+    const parsed = parseLocalUzbekIntent("Ertaga zalga boraman", {
+      referenceDate: fixedNow,
+      timezone: 'Asia/Tashkent',
+    });
+
+    assert.strictEqual(parsed.category, 'vazifa');
+    assert.strictEqual(parsed.date, '2026-10-31');
+  });
+
+  test('11. Faoliyat NLP: Bir so\'zli noaniq "Zal" clarification talab qiladi', () => {
+    const parsed = parseLocalUzbekIntent("Zal");
+    assert.strictEqual(parsed.category, 'noaniq');
+    assert.strictEqual(Boolean(parsed.clarificationNeeded), true);
+  });
+
+  test('11. Faoliyat NLP: "Yakshanba tog\'ga chiqdim" eng yaqin o\'tgan yakshanbani hisoblaydi', () => {
+    const fixedNow = new Date('2026-10-30T10:00:00Z'); // Juma 2026-10-30
+    const parsed = parseLocalUzbekIntent("Yakshanba tog'ga chiqdim", {
+      referenceDate: fixedNow,
+      timezone: 'Asia/Tashkent',
+    });
+
+    assert.strictEqual(parsed.category, 'faoliyat');
+    // Juma (2026-10-30) dan oldingi yakshanba -> 2026-10-25
+    assert.strictEqual(parsed.date, '2026-10-25');
+  });
+
+  test('11. Contract & Creation: Bajarilgan faoliyat kelajak sanasiga kiritilishi rad etiladi', () => {
+    const today = '2026-10-30';
+    const futureAct: ParsedItem = {
+      category: 'faoliyat',
+      title: 'Yugurish',
+      date: '2026-11-05',
+      confidence: 0.9,
+      explanationUz: '',
+      source: 'local-rules',
+    };
+
+    const valRes = validateParsedItemContract(futureAct, today);
+    assert.strictEqual(valRes.isValid, false);
+
+    const procRes = processEntityCreationFromParsed(futureAct, today, '12:00');
+    assert.strictEqual(procRes.success, false);
+  });
+
+  test('11. Contract & Creation: Yaroqli faoliyat processEntityCreationFromParsed dan muvaffaqiyatli o\'tadi', () => {
+    const today = '2026-10-30';
+    const validAct: ParsedItem = {
+      category: 'faoliyat',
+      title: 'Suzish mashg\'uloti',
+      date: '2026-10-30',
+      durationMinutes: 45,
+      quantity: 1000,
+      unit: 'metr',
+      activityCategory: 'sport',
+      confidence: 0.9,
+      explanationUz: '',
+      source: 'local-rules',
+    };
+
+    const procRes = processEntityCreationFromParsed(validAct, today, '12:00');
+    assert.strictEqual(procRes.success, true);
+    if (procRes.success && procRes.entityType === 'faoliyat') {
+      assert.strictEqual(procRes.payload.title, 'Suzish mashg\'uloti');
+      assert.strictEqual(procRes.payload.category, 'sport');
+      assert.strictEqual(procRes.payload.durationMinutes, 45);
+      assert.strictEqual(procRes.payload.quantity, 1000);
+      assert.strictEqual(procRes.payload.unit, 'metr');
+      assert.strictEqual(procRes.payload.localDate, '2026-10-30');
+    }
+  });
+
   console.log(`\nJami: ${passed} muvaffaqiyatli, ${failed} xato.`);
   if (failed > 0) {
     process.exit(1);

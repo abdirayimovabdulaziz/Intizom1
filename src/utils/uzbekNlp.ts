@@ -1,4 +1,14 @@
-import { ParsedItem, ExpenseCategory, EXPENSE_CATEGORIES, Currency, HabitFrequency, HabitType } from '../types';
+import {
+  ParsedItem,
+  ExpenseCategory,
+  EXPENSE_CATEGORIES,
+  Currency,
+  HabitFrequency,
+  HabitType,
+  ActivityCategory,
+  ACTIVITY_CATEGORIES,
+  ActivityCreatePayload,
+} from '../types';
 import {
   getDateStringInTimezone,
   getTimeStringInTimezone,
@@ -6,6 +16,8 @@ import {
   getDayOfWeekFromYMD,
   isValidYMD,
   validateDaysOfWeek,
+  getPreviousDayOfWeekYMD,
+  validateActivity,
 } from './domainCalculations';
 
 export interface ParseNlpOptions {
@@ -382,7 +394,7 @@ export function validateParsedItemContract(
     return { isValid: false, errors: ['Natija obyekti topilmadi yoki yaroqsiz formatda'], item: null };
   }
 
-  const validCategories = ['vazifa', 'odat', 'maqsad', 'uchrashuv', 'harajat', 'qabul', 'noaniq'];
+  const validCategories = ['vazifa', 'odat', 'maqsad', 'uchrashuv', 'harajat', 'qabul', 'faoliyat', 'noaniq'];
   if (!raw.category || !validCategories.includes(raw.category)) {
     errors.push(`Kategoriya noto'g'ri: ${raw.category}`);
   }
@@ -396,6 +408,11 @@ export function validateParsedItemContract(
     } else {
       date = trimmedDate;
     }
+  }
+
+  // Faoliyat kelajak sanasiga kiritilishi mumkin emas
+  if (raw.category === 'faoliyat' && date && date > contextDateStr) {
+    errors.push(`Bajarilgan faoliyat kelajak sanasiga (${date}) kiritilishi mumkin emas`);
   }
 
   // Time validation: distinguish MISSING vs INVALID
@@ -455,6 +472,27 @@ export function validateParsedItemContract(
     if (typeof raw.amount === 'number' && Number.isFinite(raw.amount) && raw.amount > 0) {
       amount = raw.amount;
     }
+  }
+
+  // Faoliyat duration & quantity checks
+  let durationMinutes: number | null = null;
+  if (raw.durationMinutes !== undefined && raw.durationMinutes !== null) {
+    if (typeof raw.durationMinutes !== 'number' || !Number.isFinite(raw.durationMinutes) || raw.durationMinutes <= 0) {
+      errors.push("Faoliyat davomiyligi musbat chekli son bo'lishi shart");
+    } else {
+      durationMinutes = raw.durationMinutes;
+    }
+  }
+
+  let activityCategory: ActivityCategory | null = null;
+  if (raw.activityCategory) {
+    if (!(ACTIVITY_CATEGORIES as readonly string[]).includes(raw.activityCategory)) {
+      errors.push(`Noma'lum faoliyat toifasi: ${raw.activityCategory}`);
+    } else {
+      activityCategory = raw.activityCategory;
+    }
+  } else if (raw.category === 'faoliyat') {
+    activityCategory = 'boshqa';
   }
 
   // Recurrence validation
@@ -517,6 +555,10 @@ export function validateParsedItemContract(
     timeSlot: typeof raw.timeSlot === 'string' && raw.timeSlot.trim() ? raw.timeSlot.trim() : null,
     quantity: typeof raw.quantity === 'number' && Number.isFinite(raw.quantity) && raw.quantity > 0 ? raw.quantity : null,
     unit: typeof raw.unit === 'string' && raw.unit.trim() ? raw.unit.trim() : null,
+    durationMinutes,
+    activityCategory,
+    linkedHabitId: typeof raw.linkedHabitId === 'string' && raw.linkedHabitId.trim() ? raw.linkedHabitId.trim() : null,
+    linkedTaskId: typeof raw.linkedTaskId === 'string' && raw.linkedTaskId.trim() ? raw.linkedTaskId.trim() : null,
     frequency,
     targetDaysPerWeek,
     daysOfWeek,
@@ -575,7 +617,25 @@ export function parseUzbekTextLocal(
     return preflightBlocked;
   }
 
+  // 1.5. Vague single-word check (e.g. "Zal", "Sport", "Kitob", "Basseyn")
+  const singleTokens = normalized.toLowerCase().replace(/['`‘ʻ’ʼ]/g, '').trim().split(/\s+/).filter(Boolean);
+  if (singleTokens.length === 1 && /^(?:zal|sport|kitob|yugurish|basseyn|fitnes)$/i.test(singleTokens[0])) {
+    return {
+      category: 'noaniq',
+      title: normalized,
+      clarificationNeeded: "Iltimos, aniqroq yozing (masalan: 'Bugun zalga bordim' yoki 'Haftasiga 3 kun zal').",
+      confidence: 0.9,
+      explanationUz: "Qayd turini aniqlashtirish zarur.",
+      source: 'local-rules',
+    };
+  }
+
   let workingText = normalized;
+
+  // Past verbs detection: "bordim", "bordik", "shug'ullandim", "shug'ullandik", "suzdim", "suzdik", "chiqdim", "chiqdik", "chiqib keldik", "yugurdim", "yugurdik", "o'qidim", "o'qidik", "mashq qildim"
+  const pastVerbRegex = /\b(?:bordim|bordik|shug'ullandim|shug'ullandik|suzdim|suzdik|chiqdim|chiqdik|chiqib\s+keldik|yugurdim|yugurdik|o'qidim|o'qidik|mashq\s+qildim)\b/i;
+  const isPastAction = pastVerbRegex.test(workingText);
+  const isExplicitActivityPrefix = /^(?:faoliyat|mashg'ulot)(?:\s*:|\s+)/i.test(normalized);
 
   // 2. Time & Date token extraction BEFORE money parsing to prevent number collision (e.g. 17:00 -> 17)
   let targetTime: string | null = null;
@@ -622,13 +682,16 @@ export function parseUzbekTextLocal(
     workingText = workingText.replace(isoMatch[0], ' ');
   }
 
-  // Relative words: bugun, ertaga, indin
+  // Relative words: bugun, ertaga, indin, kecha
   if (/\bindin\b/i.test(workingText)) {
     targetDate = addDaysToYMD(todayStr, 2);
     workingText = workingText.replace(/\bindin\b/gi, ' ');
   } else if (/\bertaga\b/i.test(workingText)) {
     targetDate = addDaysToYMD(todayStr, 1);
     workingText = workingText.replace(/\bertaga\b/gi, ' ');
+  } else if (/\bkecha\b/i.test(workingText)) {
+    targetDate = addDaysToYMD(todayStr, -1);
+    workingText = workingText.replace(/\bkecha\b/gi, ' ');
   } else if (/\bbugun\b/i.test(workingText)) {
     targetDate = todayStr;
     workingText = workingText.replace(/\bbugun\b/gi, ' ');
@@ -661,22 +724,62 @@ export function parseUzbekTextLocal(
     yakshanba: 7,
   };
 
-  const detectedDays: number[] = [];
-  for (const [dayName, dayNum] of Object.entries(dayMap)) {
-    const dayRegex = new RegExp(`\\b${dayName}(?:da|gi|lari)?\\b`, 'i');
-    if (dayRegex.test(workingText)) {
-      detectedDays.push(dayNum);
-      workingText = workingText.replace(dayRegex, ' ');
+  const isRecurrenceSchedule = /har\s+|kunlari|haftasiga|haftada/i.test(normalized);
+  if (!isRecurrenceSchedule && isPastAction) {
+    // Relative past days: e.g. "Yakshanba tog'ga chiqdim", "Dushanba kuni suzdim"
+    let pastDayDetected: number | null = null;
+    for (const [dayName, dayNum] of Object.entries(dayMap)) {
+      const singleDayRegex = new RegExp(`\\b${dayName}(?:da|gi|kuni)?\\b`, 'i');
+      if (singleDayRegex.test(workingText)) {
+        pastDayDetected = dayNum;
+        workingText = workingText.replace(singleDayRegex, ' ');
+        break;
+      }
+    }
+    if (pastDayDetected !== null && !targetDate) {
+      targetDate = getPreviousDayOfWeekYMD(todayStr, pastDayDetected);
+    }
+  } else {
+    const detectedDays: number[] = [];
+    for (const [dayName, dayNum] of Object.entries(dayMap)) {
+      const dayRegex = new RegExp(`\\b${dayName}(?:da|gi|lari)?\\b`, 'i');
+      if (dayRegex.test(workingText)) {
+        detectedDays.push(dayNum);
+        workingText = workingText.replace(dayRegex, ' ');
+      }
+    }
+
+    if (detectedDays.length > 0) {
+      frequency = 'specific_days';
+      daysOfWeek = Array.from(new Set(detectedDays)).sort((a, b) => a - b);
+    } else if (/\bhar\s+kuni\b/i.test(workingText)) {
+      frequency = 'daily';
+      daysOfWeek = [1, 2, 3, 4, 5, 6, 7];
+      workingText = workingText.replace(/\bhar\s+kuni\b/gi, ' ');
     }
   }
 
-  if (detectedDays.length > 0) {
-    frequency = 'specific_days';
-    daysOfWeek = Array.from(new Set(detectedDays)).sort((a, b) => a - b);
-  } else if (/\bhar\s+kuni\b/i.test(workingText)) {
-    frequency = 'daily';
-    daysOfWeek = [1, 2, 3, 4, 5, 6, 7];
-    workingText = workingText.replace(/\bhar\s+kuni\b/gi, ' ');
+  // 3.5. Duration in minutes extraction (e.g. "1 soat", "1.5 soat", "40 daqiqa", "40 minut")
+  let durationMinutes: number | null = null;
+  const hrMinRegex = /(\d+(?:[.,]\d+)?)\s*soat(?:\s*(\d+)\s*(?:daqiqa|minut))?/i;
+  const hrMinMatch = workingText.match(hrMinRegex);
+  if (hrMinMatch) {
+    const hrs = parseFloat(hrMinMatch[1].replace(',', '.'));
+    const extraM = hrMinMatch[2] ? parseInt(hrMinMatch[2], 10) : 0;
+    if (Number.isFinite(hrs) && hrs > 0) {
+      durationMinutes = Math.round(hrs * 60 + extraM);
+      workingText = workingText.replace(hrMinMatch[0], ' ');
+    }
+  } else {
+    const minRegex = /(\d+)\s*(?:daqiqa|minut)\b/i;
+    const minMatch = workingText.match(minRegex);
+    if (minMatch) {
+      const m = parseInt(minMatch[1], 10);
+      if (Number.isFinite(m) && m > 0) {
+        durationMinutes = m;
+        workingText = workingText.replace(minMatch[0], ' ');
+      }
+    }
   }
 
   // 4. Money & Currency Extraction
@@ -716,8 +819,8 @@ export function parseUzbekTextLocal(
     }
   }
 
-  // Clean expense prefix
-  workingText = workingText.replace(/^(?:harajat|xarajat|sarf|rasxod|vazifa|maqsad|odat)(?:\s*:|\s+)/i, ' ');
+  // Clean prefixes
+  workingText = workingText.replace(/^(?:harajat|xarajat|sarf|rasxod|vazifa|maqsad|odat|faoliyat)(?:\s*:|\s+)/i, ' ');
 
   // 5. Category Determination
   let category: ParsedItem['category'] = 'noaniq';
@@ -792,13 +895,13 @@ export function parseUzbekTextLocal(
     category = 'qabul';
   }
 
-  // 7. General quantity & unit for habits/tasks (e.g. "60 daqiqa yurish", "20 bet kitob")
+  // 7. General quantity & unit for habits/tasks/activities (e.g. "30 bet kitob", "5 km")
   if (!quantity) {
     const qtyMatch = workingText.match(/(\d+(?:[.,]\d+)?)\s*(sahifa|bet|varaq|daqiqa|minut|litr|km|kilometr|martta|marta|soat|ta dars|dars|qadam)\b/i);
     if (qtyMatch) {
       quantity = parseFloat(qtyMatch[1].replace(',', '.'));
       let rawUnit = qtyMatch[2].toLowerCase();
-      if (rawUnit === 'bet' || rawUnit === 'varaq') rawUnit = 'sahifa';
+      if (rawUnit === 'bet' || rawUnit === 'varaq' || rawUnit === 'sahifa') rawUnit = 'bet';
       if (rawUnit === 'minut') rawUnit = 'daqiqa';
       if (rawUnit === 'kilometr') rawUnit = 'km';
       if (rawUnit === 'martta') rawUnit = 'marta';
@@ -808,11 +911,31 @@ export function parseUzbekTextLocal(
   }
 
   // 8. Category Inference
+  let activityCategory: ActivityCategory | null = null;
+
   if (category === 'noaniq') {
     if (amount !== null && currency !== null) {
       category = 'harajat';
     } else if (isSupplement) {
       category = 'qabul';
+    } else if (isPastAction || isExplicitActivityPrefix) {
+      // Past action or activity logged: "Bugun zalga bordim", "Kecha basseynda suzdim"
+      category = 'faoliyat';
+      if (!targetDate) targetDate = todayStr;
+
+      if (/(?:zal|fitnes|suz|basseyn|yugur|mashq|turnik|gantel|sport)/i.test(normalized)) {
+        activityCategory = 'sport';
+      } else if (/(?:kitob|mutolaa|o'qidim|oqidim|dars|kurs|bet)/i.test(normalized)) {
+        activityCategory = 'talim';
+      } else if (/(?:tog|sayr|yurish|piyoda)/i.test(normalized)) {
+        activityCategory = 'salomatlik';
+      } else if (/(?:ish|hisobot|majlis|loyiha)/i.test(normalized)) {
+        activityCategory = 'ish';
+      } else if (/(?:do'stlar|dostlar|oila|dam\s+olish)/i.test(normalized)) {
+        activityCategory = 'shaxsiy';
+      } else {
+        activityCategory = 'boshqa';
+      }
     } else if (frequency !== null || daysOfWeek !== null || lower.includes('har kuni')) {
       category = 'odat';
     } else if (lower.includes('oy oxirigacha') || lower.includes('yil oxirigacha')) {
@@ -824,7 +947,13 @@ export function parseUzbekTextLocal(
     }
   }
 
-  if (!targetDate && !hasInvalidDate && (category === 'vazifa' || category === 'uchrashuv' || category === 'harajat')) {
+  // Completed activity cannot be in the future!
+  if (category === 'faoliyat' && targetDate && targetDate > todayStr) {
+    category = 'noaniq';
+    clarificationNeeded = `Bajarilgan faoliyat kelajak sanasiga (${targetDate}) kiritilishi mumkin emas.`;
+  }
+
+  if (!targetDate && !hasInvalidDate && (category === 'vazifa' || category === 'uchrashuv' || category === 'harajat' || category === 'faoliyat')) {
     targetDate = todayStr;
   }
 
@@ -848,7 +977,20 @@ export function parseUzbekTextLocal(
     .replace(/\s+/g, ' ')
     .trim();
 
-  if (title.length > 0) {
+  if (category === 'faoliyat') {
+    // Keep a descriptive title for activity
+    const cleanAct = normalized
+      .replace(/^(?:faoliyat|mashg'ulot)(?:\s*:|\s+)/i, '')
+      .replace(/\b(?:kecha|bugun|soat\s*\d{1,2}:\d{2})\b/gi, '')
+      .replace(/[^\w\s'ʻʼ-]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (cleanAct.length > 0) {
+      title = cleanAct.charAt(0).toUpperCase() + cleanAct.slice(1);
+    } else {
+      title = activityCategory === 'sport' ? 'Mashg\'ulot' : 'Bajarilgan faoliyat';
+    }
+  } else if (title.length > 0) {
     title = title.charAt(0).toUpperCase() + title.slice(1);
   } else {
     if (category === 'qabul') {
@@ -871,6 +1013,10 @@ export function parseUzbekTextLocal(
     explanationUz = `💊 Kunlik qabul: "${title}"${dosage ? ` (${dosage})` : ''}${timeSlot ? ` [${timeSlot}]` : ''}`;
   } else if (category === 'vazifa') {
     explanationUz = `📌 Vazifa: "${title}" (${formatUzbekDateLabel(targetDate || todayStr, targetTime, todayStr)})`;
+  } else if (category === 'faoliyat') {
+    const durStr = durationMinutes ? `, ${durationMinutes} daqiqa` : '';
+    const qtyStr = quantity && unit ? `, ${quantity} ${unit}` : '';
+    explanationUz = `🏃 Bajarilgan faoliyat: "${title}" (${formatUzbekDateLabel(targetDate || todayStr, targetTime, todayStr)}${durStr}${qtyStr})`;
   } else if (category === 'odat') {
     explanationUz = `🔁 Odat: "${title}"`;
     if (quantity && unit) explanationUz += ` (${quantity} ${unit})`;
@@ -888,6 +1034,10 @@ export function parseUzbekTextLocal(
     title,
     date: targetDate,
     time: targetTime,
+    durationMinutes,
+    activityCategory,
+    linkedHabitId: null,
+    linkedTaskId: null,
     quantity,
     unit,
     amount,
@@ -1144,7 +1294,7 @@ export function buildTaskCreatePayload(
 
   const date = parsed.date && isValidYMD(parsed.date) ? parsed.date : defaultDate;
 
-  return {
+    return {
     success: true,
     payload: {
       title,
@@ -1158,11 +1308,66 @@ export function buildTaskCreatePayload(
   };
 }
 
+export function buildActivityCreatePayload(
+  parsed: ParsedItem,
+  defaultDate: string,
+  defaultTime: string
+): { success: true; payload: ActivityCreatePayload } | { success: false; error: string } {
+  if (parsed.isIncomeBlocked || parsed.isIntervalBlocked || parsed.isMultipleActionsBlocked || parsed.clarificationNeeded) {
+    return { success: false, error: parsed.clarificationNeeded || "Amalni aniqlashtirish zarur." };
+  }
+
+  const title = parsed.title?.trim();
+  if (!title) {
+    return { success: false, error: "Faoliyat sarlavhasi (nomi) kiritilmagan." };
+  }
+
+  const date = parsed.date && isValidYMD(parsed.date) ? parsed.date : defaultDate;
+
+  // Completed activity cannot be saved in the future
+  if (date > defaultDate) {
+    return { success: false, error: `Bajarilgan faoliyat kelajak sanasiga (${date}) kiritilishi mumkin emas.` };
+  }
+
+  if (parsed.durationMinutes !== undefined && parsed.durationMinutes !== null) {
+    if (typeof parsed.durationMinutes !== 'number' || !Number.isFinite(parsed.durationMinutes) || parsed.durationMinutes <= 0) {
+      return { success: false, error: "Faoliyat davomiyligi musbat chekli son bo'lishi shart." };
+    }
+  }
+
+  if (parsed.quantity !== undefined && parsed.quantity !== null) {
+    if (typeof parsed.quantity !== 'number' || !Number.isFinite(parsed.quantity) || parsed.quantity <= 0) {
+      return { success: false, error: "Faoliyat miqdori musbat chekli son bo'lishi shart." };
+    }
+  }
+
+  const category: ActivityCategory = parsed.activityCategory && (ACTIVITY_CATEGORIES as readonly string[]).includes(parsed.activityCategory)
+    ? parsed.activityCategory
+    : 'boshqa';
+
+  return {
+    success: true,
+    payload: {
+      title,
+      localDate: date,
+      time: parsed.time || defaultTime,
+      category,
+      durationMinutes: parsed.durationMinutes || undefined,
+      quantity: parsed.quantity || undefined,
+      unit: parsed.unit || undefined,
+      linkedHabitId: parsed.linkedHabitId || undefined,
+      linkedTaskId: parsed.linkedTaskId || undefined,
+      source: 'bot',
+    },
+  };
+}
+
 export type ProcessEntityResult =
   | { success: true; entityType: 'harajat'; payload: ExpenseCreatePayload; feedbackText: string }
   | { success: true; entityType: 'odat'; payload: HabitCreatePayload; feedbackText: string }
   | { success: true; entityType: 'qabul'; payload: HabitCreatePayload; feedbackText: string; markDoneToday?: boolean }
   | { success: true; entityType: 'vazifa' | 'uchrashuv'; payload: TaskCreatePayload; feedbackText: string }
+  | { success: true; entityType: 'faoliyat'; payload: ActivityCreatePayload; feedbackText: string }
   | { success: false; error: string; promptClarification?: boolean };
 
 /**
@@ -1267,6 +1472,22 @@ export function processEntityCreationFromParsed(
       entityType: taskBuild.payload.category,
       payload: taskBuild.payload,
       feedbackText: `✅ ${taskBuild.payload.category === 'uchrashuv' ? 'Uchrashuv' : 'Vazifa'} saqlandi: **"${taskBuild.payload.title}"** (${dateLabel})`,
+    };
+  }
+
+  if (parsed.category === 'faoliyat') {
+    const actBuild = buildActivityCreatePayload(parsed, defaultDate, defaultTime);
+    if (!actBuild.success) {
+      return { success: false, error: actBuild.error, promptClarification: true };
+    }
+
+    const durPart = actBuild.payload.durationMinutes ? `, ${actBuild.payload.durationMinutes} daqiqa` : '';
+    const qtyPart = actBuild.payload.quantity && actBuild.payload.unit ? `, ${actBuild.payload.quantity} ${actBuild.payload.unit}` : '';
+    return {
+      success: true,
+      entityType: 'faoliyat',
+      payload: actBuild.payload,
+      feedbackText: `🏃 Bajarilgan faoliyat saqlandi: **"${actBuild.payload.title}"** (${formatUzbekDateLabel(actBuild.payload.localDate)}${durPart}${qtyPart})`,
     };
   }
 

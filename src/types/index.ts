@@ -71,6 +71,36 @@ export interface Expense {
   isArchived?: boolean;
 }
 
+export const ACTIVITY_CATEGORIES = [
+  'sport',
+  'salomatlik',
+  'talim',
+  'ish',
+  'shaxsiy',
+  'boshqa',
+] as const;
+
+export type ActivityCategory = (typeof ACTIVITY_CATEGORIES)[number];
+
+export interface Activity {
+  id: string;
+  title: string;
+  localDate: string; // YYYY-MM-DD
+  time?: string; // HH:mm
+  category: ActivityCategory;
+  durationMinutes?: number; // positive finite number
+  quantity?: number; // positive finite number
+  unit?: string;
+  notes?: string;
+  linkedHabitId?: string;
+  linkedTaskId?: string;
+  source: 'bot' | 'manual';
+  createdAt: string; // ISO string
+  isArchived?: boolean;
+}
+
+export type ActivityCreatePayload = Omit<Activity, 'id' | 'createdAt'>;
+
 export interface GoalInternalHabit {
   id: string;
   title: string;
@@ -111,7 +141,7 @@ export interface Goal {
 }
 
 export interface ParsedItem {
-  category: 'vazifa' | 'odat' | 'maqsad' | 'uchrashuv' | 'harajat' | 'qabul' | 'noaniq';
+  category: 'vazifa' | 'odat' | 'maqsad' | 'uchrashuv' | 'harajat' | 'qabul' | 'faoliyat' | 'noaniq';
   title: string;
   date?: string | null;
   time?: string | null;
@@ -120,6 +150,10 @@ export interface ParsedItem {
   amount?: number | null;
   currency?: Currency | null;
   expenseCategory?: ExpenseCategory | null;
+  durationMinutes?: number | null;
+  activityCategory?: ActivityCategory | null;
+  linkedHabitId?: string | null;
+  linkedTaskId?: string | null;
   dosage?: string | null;
   timeSlot?: string | null;
   daysOfWeek?: number[] | null;

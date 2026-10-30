@@ -13,8 +13,12 @@ import {
   addDaysToYMD,
   validateDaysOfWeek,
   isValidYMD,
+  validateActivity,
+  getCalendarPeriodBounds,
+  calculateCalendarPeriodSummary,
+  getPreviousDayOfWeekYMD,
 } from '../utils/domainCalculations';
-import { Habit, Goal, Task, GoalInternalHabit } from '../types';
+import { Habit, Goal, Task, GoalInternalHabit, Activity } from '../types';
 import {
   domainReducer,
   DomainState,
@@ -941,6 +945,256 @@ console.log('=== KUNLIK YORDAMCHI DOMEN TESTLARI ===\n');
     stateReconfirm.habits[0].streak === 4,
     'p6) Streak 4 holida o\'zgarmay qoladi'
   );
+}
+
+// Test Q: calculateHabitIntakeDecision targetHabitId xatosi va 1 ta qisman moslik siyosati
+{
+  const habitGym: Habit = {
+    id: 'h-zal',
+    title: 'Zalga borish',
+    category: 'odat',
+    habitType: 'general',
+    frequency: 'daily',
+    daysOfWeek: [1, 2, 3, 4, 5, 6, 7],
+    hasQuantity: false,
+    streak: 1,
+    bestStreak: 1,
+    history: {},
+  };
+
+  const habitArchived: Habit = {
+    id: 'h-archived',
+    title: 'Arxivlangan odat',
+    category: 'odat',
+    habitType: 'general',
+    frequency: 'daily',
+    daysOfWeek: [1, 2, 3, 4, 5, 6, 7],
+    hasQuantity: false,
+    streak: 0,
+    bestStreak: 0,
+    history: {},
+    isArchived: true,
+  };
+
+  // 1. targetHabitId berilgan, ammo topilmagan yoki arxivlangan -> xato qaytariladi, boshqa odatga fallback bo'lmaydi
+  const decisionTargetNotFound = calculateHabitIntakeDecision(
+    [habitGym, habitArchived],
+    { title: 'Zalga borish', targetHabitId: 'h-not-found', markDoneToday: true },
+    '2026-10-30'
+  );
+  assert(decisionTargetNotFound.action === 'error', 'q1) Topilmagan targetHabitId uchun aniq xato qaytariladi');
+  assert(decisionTargetNotFound.shouldMarkCompletion === false, 'q1) shouldMarkCompletion false bo\'ladi');
+
+  const decisionTargetArchived = calculateHabitIntakeDecision(
+    [habitGym, habitArchived],
+    { title: 'Arxivlangan odat', targetHabitId: 'h-archived', markDoneToday: true },
+    '2026-10-30'
+  );
+  assert(decisionTargetArchived.action === 'error', 'q2) Arxivlangan targetHabitId uchun aniq xato qaytariladi');
+
+  // 2. 1 ta qisman moslik (partial match length === 1): avtomatik mark_completed QILINMAYDI, tasdiqlash so'raladi
+  const decisionPartialOne = calculateHabitIntakeDecision(
+    [habitGym],
+    { title: 'Zal', markDoneToday: true },
+    '2026-10-30'
+  );
+  assert(decisionPartialOne.action === 'disambiguation_needed', 'q3) 1 ta qisman moslik avtomatik belgilamasdan tasdiqlash talab qiladi');
+  assert(decisionPartialOne.shouldMarkCompletion === false, 'q3) shouldMarkCompletion false');
+}
+
+// Test R: validateActivity tekshiruvlari
+{
+  const todayStr = '2026-10-30';
+
+  // Yaroqli faoliyat
+  const validAct = validateActivity(
+    {
+      title: 'Suzish mashg\'uloti',
+      localDate: '2026-10-30',
+      category: 'sport',
+      durationMinutes: 45,
+      quantity: 1000,
+    },
+    todayStr
+  );
+  assert(validAct.isValid === true, 'r1) Yaroqli faoliyat tekshiruvdan muvaffaqiyatli o\'tadi');
+
+  // Bo'sh sarlavha rad etiladi
+  const emptyTitle = validateActivity(
+    { title: '   ', localDate: '2026-10-30' },
+    todayStr
+  );
+  assert(emptyTitle.isValid === false, 'r2) Bo\'sh sarlavha rad etiladi');
+
+  // Noto'g'ri sana formati rad etiladi
+  const invalidDate = validateActivity(
+    { title: 'Yugurish', localDate: '2026-02-31' },
+    todayStr
+  );
+  assert(invalidDate.isValid === false, 'r3) Kalendarda yo\'q sana rad etiladi');
+
+  // Kelajakdagi sana rad etiladi!
+  const futureDate = validateActivity(
+    { title: 'Ertaga yugurish', localDate: '2026-10-31' },
+    todayStr
+  );
+  assert(futureDate.isValid === false, 'r4) Kelajak sanasiga kiritilgan faoliyat rad etiladi');
+
+  // Musbat bo'lmagan yoki cheksiz davomiylik rad etiladi
+  const badDur = validateActivity(
+    { title: 'Zal', localDate: '2026-10-30', durationMinutes: -10 },
+    todayStr
+  );
+  assert(badDur.isValid === false, 'r5) Manfiy davomiylik rad etiladi');
+
+  const infDur = validateActivity(
+    { title: 'Zal', localDate: '2026-10-30', durationMinutes: Infinity },
+    todayStr
+  );
+  assert(infDur.isValid === false, 'r6) Cheksiz davomiylik rad etiladi');
+
+  // Musbat bo'lmagan miqdor rad etiladi
+  const zeroQty = validateActivity(
+    { title: 'Kitob', localDate: '2026-10-30', quantity: 0 },
+    todayStr
+  );
+  assert(zeroQty.isValid === false, 'r7) 0 miqdor rad etiladi');
+}
+
+// Test S: Sarhisob (calculateCalendarPeriodSummary) va deduplikatsiya
+{
+  const refDate = '2026-10-30'; // Juma
+
+  // Hafta chegaralari: Du (2026-10-26) .. Ya (2026-11-01)
+  const weekBounds = getCalendarPeriodBounds('hafta', refDate);
+  assert(weekBounds.startDate === '2026-10-26', 's1) Hafta boshi dushanba 2026-10-26');
+  assert(weekBounds.endDate === '2026-11-01', 's1) Hafta oxiri yakshanba 2026-11-01');
+
+  // Oy chegaralari
+  const monthBounds = getCalendarPeriodBounds('oy', refDate);
+  assert(monthBounds.startDate === '2026-10-01', 's2) Oy boshi 2026-10-01');
+  assert(monthBounds.endDate === '2026-10-31', 's2) Oy oxiri 2026-10-31');
+
+  // Faoliyatlar:
+  // 1. Sport (Zal) - 60 daqiqa, linked to habit 'h-gym' on 2026-10-28
+  // 2. Sport (Yugurish) - 30 daqiqa, 5 km on 2026-10-28 (ayni kunda ikkinchi faoliyat!)
+  // 3. Ta'lim (Kitob) - davomiyliksiz, 40 bet on 2026-10-29
+  const testActivities: Activity[] = [
+    {
+      id: 'act-1',
+      title: 'Zalga bordim',
+      localDate: '2026-10-28',
+      category: 'sport',
+      durationMinutes: 60,
+      linkedHabitId: 'h-gym',
+      source: 'manual',
+      createdAt: '2026-10-28T10:00:00Z',
+    },
+    {
+      id: 'act-2',
+      title: 'Yugurdim',
+      localDate: '2026-10-28',
+      category: 'sport',
+      durationMinutes: 30,
+      quantity: 5,
+      unit: 'km',
+      source: 'manual',
+      createdAt: '2026-10-28T18:00:00Z',
+    },
+    {
+      id: 'act-3',
+      title: 'Kitob mutolaasi',
+      localDate: '2026-10-29',
+      category: 'talim',
+      quantity: 40,
+      unit: 'bet',
+      source: 'manual',
+      createdAt: '2026-10-29T20:00:00Z',
+    },
+  ];
+
+  // Odatlar:
+  // 'h-gym': 2026-10-28 da bajarilgan (lekin act-1 unga bog'langan, deduplikatsiya qilinishi kerak!)
+  // 'h-meditation': 2026-10-27 da standalone bajarilgan (hech qanday faoliyat unga bog'lanmagan)
+  const testHabits: Habit[] = [
+    {
+      id: 'h-gym',
+      title: 'Zal mashg\'uloti',
+      category: 'odat',
+      habitType: 'general',
+      frequency: 'weekly_target',
+      targetDaysPerWeek: 3,
+      daysOfWeek: [1, 2, 3, 4, 5, 6, 7],
+      hasQuantity: false,
+      streak: 1,
+      bestStreak: 1,
+      history: {
+        '2026-10-28': { completed: true, timestamp: '2026-10-28T10:00:00Z' },
+      },
+    },
+    {
+      id: 'h-meditation',
+      title: 'Meditatsiya',
+      category: 'odat',
+      habitType: 'general',
+      frequency: 'daily',
+      daysOfWeek: [1, 2, 3, 4, 5, 6, 7],
+      hasQuantity: false,
+      streak: 1,
+      bestStreak: 1,
+      history: {
+        '2026-10-27': { completed: true, timestamp: '2026-10-27T08:00:00Z' },
+      },
+    },
+  ];
+
+  const testTasks: Task[] = [
+    {
+      id: 't-1',
+      title: 'Hisobot topshirildi',
+      category: 'vazifa',
+      date: '2026-10-27',
+      status: 'completed',
+      priority: 'high',
+      source: 'miniapp',
+    },
+  ];
+
+  const summary = calculateCalendarPeriodSummary(
+    testActivities,
+    testHabits,
+    testTasks,
+    'hafta',
+    refDate
+  );
+
+  assert(summary.totalActivities === 3, 's3) Jami faoliyatlar soni 3 ta');
+  // 2026-10-28 (2 ta faoliyat) va 2026-10-29 (1 ta faoliyat) -> 2 ta faol kun!
+  assert(summary.activeDaysCount === 2, 's3) Faoliyatlar bo\'yicha faol kunlar soni 2 ta (ayni kundagi bir nechta mashq 1 faol kun sanaladi)');
+  assert(summary.totalDurationMinutes === 90, 's3) Jami vaqt 60 + 30 = 90 daqiqa (kitob uchun soxta vaqt o\'ylab topilmagan)');
+  assert(summary.durationsCount === 2, 's3) Davomiyligi bor yozuvlar soni 2 ta');
+
+  // Miqdorlar alohida birlik bo'yicha guruhlangan: km va bet hech qachon qo'shilmaydi!
+  assert(summary.unitQuantities['km'] === 5, 's4) km miqdori 5');
+  assert(summary.unitQuantities['bet'] === 40, 's4) bet miqdori 40');
+
+  // Deduplikatsiya: h-gym 2026-10-28 da act-1 ga bog'langanligi sababli standalone habit sifatida qayta hisoblanmaydi!
+  // Faqat h-meditation (2026-10-27) standalone habit sanaladi:
+  assert(summary.standaloneHabitCompletions === 1, 's5) Bog\'langan odat deduplikatsiya qilindi, faqat 1 ta standalone odat hisoblandi');
+  assert(summary.completedTasksCount === 1, 's5) Bajarilgan vazifalar soni 1 ta');
+}
+
+// Test T: getPreviousDayOfWeekYMD
+{
+  const refDate = '2026-10-30'; // 2026-10-30 is Juma (5)
+  // Yakshanba (7): eng oxirgi o'tgan yakshanba -> 2026-10-25
+  const prevSunday = getPreviousDayOfWeekYMD(refDate, 7);
+  assert(prevSunday === '2026-10-25', 't1) 2026-10-30 Jumadan oldingi yakshanba 2026-10-25');
+  assert(prevSunday < refDate, 't1) Natija doimo o\'tgan sana bo\'ladi');
+
+  // Dushanba (1): 2026-10-26
+  const prevMonday = getPreviousDayOfWeekYMD(refDate, 1);
+  assert(prevMonday === '2026-10-26', 't2) 2026-10-30 Jumadan oldingi dushanba 2026-10-26');
 }
 
 console.log(`\n========================================`);
