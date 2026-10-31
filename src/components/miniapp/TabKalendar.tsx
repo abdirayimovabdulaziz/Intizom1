@@ -9,6 +9,7 @@ import {
   calculateCalendarPeriodSummary,
   validateActivity,
   getCalendarPeriodBounds,
+  getTaskCompletionDateInTimezone,
 } from '../../utils/domainCalculations';
 import { Activity, ActivityCategory, ACTIVITY_CATEGORIES, ActivityCreatePayload } from '../../types';
 import {
@@ -33,6 +34,7 @@ export const TabKalendar: React.FC = () => {
     tasks,
     habits,
     activities,
+    settings,
     toggleTaskComplete,
     markHabitCompletedToday,
     toggleHabitToday,
@@ -126,13 +128,21 @@ export const TabKalendar: React.FC = () => {
   });
 
   // 2. BAJARILGANLAR (Completed tasks, activities, and standalone habit completions)
-  const completedTasks = tasks.filter(
-    t => t.date === selectedDate && t.status === 'completed'
-  );
-
   const dayActivities = activities.filter(
     a => a.localDate === selectedDate
   );
+
+  const linkedTaskIdsOnDay = new Set(
+    dayActivities.map(a => a.linkedTaskId).filter(Boolean) as string[]
+  );
+
+  const completedTasks = tasks.filter(t => {
+    if (t.status !== 'completed') return false;
+    const compDate = getTaskCompletionDateInTimezone(t, settings.timezone);
+    if (compDate !== selectedDate) return false;
+    // Deduplication: if linked to an activity on this day, do not show as duplicate completed task
+    return !linkedTaskIdsOnDay.has(t.id);
+  });
 
   // Standalone habits: completed on selectedDate and not linked to any activity of this habit on selectedDate
   const standaloneHabits = activeHabits.filter(h => {
@@ -227,14 +237,17 @@ export const TabKalendar: React.FC = () => {
       source: 'manual',
     };
 
-    const val = validateActivity(payload, todayStr);
+    const val = validateActivity(payload, todayStr, { habits, tasks });
     if (!val.isValid) {
       setFormError(val.error || "Faoliyat ma'lumotlari noto'g'ri.");
       return;
     }
 
     if (editingActivityId) {
-      updateActivity(editingActivityId, payload);
+      updateActivity(editingActivityId, {
+        ...payload,
+        linkedHabitId: formLinkedHabitId ? formLinkedHabitId : null,
+      });
     } else {
       addActivity(payload);
     }
@@ -255,7 +268,8 @@ export const TabKalendar: React.FC = () => {
     habits,
     tasks,
     summaryPeriod,
-    selectedDate
+    selectedDate,
+    settings.timezone
   );
 
   const { startDate: pStart, endDate: pEnd } = getCalendarPeriodBounds(summaryPeriod, selectedDate);

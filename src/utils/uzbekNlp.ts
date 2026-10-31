@@ -1357,6 +1357,7 @@ export function buildActivityCreatePayload(
       unit: parsed.unit || undefined,
       linkedHabitId: parsed.linkedHabitId || undefined,
       linkedTaskId: parsed.linkedTaskId || undefined,
+      operationId: parsed.operationId || undefined,
       source: 'bot',
     },
   };

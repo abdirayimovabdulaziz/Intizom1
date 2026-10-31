@@ -1,4 +1,4 @@
-import { Habit, Goal, Task, HabitFrequency, Activity, ActivityCategory, ACTIVITY_CATEGORIES } from '../types';
+import { Habit, Goal, Task, HabitFrequency, Activity, ActivityCategory, ACTIVITY_CATEGORIES, HabitDayRecord } from '../types';
 
 /**
  * Normalizes timezone string to a valid IANA timezone identifier
@@ -430,6 +430,46 @@ export function calculateInternalHabitStats(
 export const calculateInternalHabitStreak = calculateInternalHabitStats;
 
 /**
+ * Synchronizes a single day's HabitDayRecord considering:
+ * - manualCompleted / manualQuantity
+ * - all individual activity contributions indexed by activityId
+ * - targetQuantity and hasQuantity rules
+ */
+export function syncHabitDayRecord(
+  currentRecord: HabitDayRecord | undefined,
+  habit: Habit
+): HabitDayRecord {
+  const manualCompleted =
+    currentRecord?.manualCompleted ?? (!currentRecord?.activityContributions ? !!currentRecord?.completed : false);
+  const manualQuantity =
+    currentRecord?.manualQuantity ?? (!currentRecord?.activityContributions ? (currentRecord?.quantity || 0) : 0);
+
+  const actContributions = currentRecord?.activityContributions || {};
+  let totalActQty = 0;
+  for (const contrib of Object.values(actContributions)) {
+    if (typeof contrib.quantity === 'number' && Number.isFinite(contrib.quantity) && contrib.quantity > 0) {
+      totalActQty += contrib.quantity;
+    }
+  }
+
+  const newTotalQty = manualQuantity + totalActQty;
+  const hasAnyActivity = Object.keys(actContributions).length > 0;
+
+  const isCompleted = habit.hasQuantity
+    ? (habit.targetQuantity ? newTotalQty >= habit.targetQuantity : newTotalQty > 0)
+    : (manualCompleted || hasAnyActivity);
+
+  return {
+    ...currentRecord,
+    completed: isCompleted,
+    quantity: habit.hasQuantity ? newTotalQty : (newTotalQty > 0 ? newTotalQty : undefined),
+    manualCompleted,
+    manualQuantity,
+    activityContributions: Object.keys(actContributions).length > 0 ? actContributions : undefined,
+  };
+}
+
+/**
  * Calculates updated habit and linked goal state atomically
  */
 export function applyHabitQuantityChange(
@@ -439,20 +479,27 @@ export function applyHabitQuantityChange(
   dateStr: string,
   timestamp: string
 ): { updatedHabit: Habit; updatedGoal?: Goal; actualDelta: number } {
-  const currentRecord = habit.history[dateStr] || { completed: false, quantity: 0 };
-  const prevQty = currentRecord.quantity || 0;
-  const newQty = Math.max(0, prevQty + deltaAmount);
-  const actualDelta = newQty - prevQty;
+  const currentRecord = habit.history[dateStr];
+  const prevManualQty =
+    currentRecord?.manualQuantity ?? (!currentRecord?.activityContributions ? (currentRecord?.quantity || 0) : 0);
+  const newManualQty = Math.max(0, prevManualQty + deltaAmount);
 
-  const isCompleted = habit.targetQuantity ? newQty >= habit.targetQuantity : newQty > 0;
-
-  const updatedHistory = {
-    ...habit.history,
-    [dateStr]: {
-      completed: isCompleted,
-      quantity: newQty,
+  const updatedRecord = syncHabitDayRecord(
+    {
+      ...currentRecord,
+      manualQuantity: newManualQty,
       timestamp,
     },
+    habit
+  );
+
+  const prevQty = currentRecord?.quantity || 0;
+  const newQty = updatedRecord.quantity || 0;
+  const actualDelta = newQty - prevQty;
+
+  const updatedHistory: Record<string, HabitDayRecord> = {
+    ...habit.history,
+    [dateStr]: updatedRecord,
   };
 
   const streakStats = calculateHabitStreakAndStats(
@@ -495,7 +542,7 @@ export function applyHabitQuantityChange(
 
 /**
  * Applies completion status (true or false) to a habit idempotently.
- * If targetCompleted matches current status, does not invert or duplicate.
+ * Updates manualCompleted and recomputes day status.
  */
 export function applyHabitCompletionStatus(
   habit: Habit,
@@ -504,8 +551,8 @@ export function applyHabitCompletionStatus(
   timestamp: string,
   targetCompleted: boolean = true
 ): { updatedHabit: Habit; updatedGoal?: Goal; wasAlreadyCompleted: boolean; actualDelta: number } {
-  const currentRecord = habit.history[dateStr] || { completed: false, quantity: 0 };
-  const wasAlreadyCompleted = !!currentRecord.completed;
+  const currentRecord = habit.history[dateStr];
+  const wasAlreadyCompleted = !!currentRecord?.completed;
 
   if (wasAlreadyCompleted === targetCompleted) {
     return {
@@ -516,18 +563,22 @@ export function applyHabitCompletionStatus(
     };
   }
 
-  const targetQty = habit.targetQuantity || 1;
-  const newQty = targetCompleted ? targetQty : 0;
-  const prevQty = currentRecord.quantity || 0;
-  const actualDelta = newQty - prevQty;
-
-  const updatedHistory = {
-    ...habit.history,
-    [dateStr]: {
-      completed: targetCompleted,
-      quantity: newQty,
+  const updatedRecord = syncHabitDayRecord(
+    {
+      ...currentRecord,
+      manualCompleted: targetCompleted,
       timestamp,
     },
+    habit
+  );
+
+  const prevQty = currentRecord?.quantity || 0;
+  const newQty = updatedRecord.quantity || 0;
+  const actualDelta = newQty - prevQty;
+
+  const updatedHistory: Record<string, HabitDayRecord> = {
+    ...habit.history,
+    [dateStr]: updatedRecord,
   };
 
   const streakStats = calculateHabitStreakAndStats(
@@ -577,8 +628,10 @@ export function applyHabitToggle(
   dateStr: string,
   timestamp: string
 ): { updatedHabit: Habit; updatedGoal?: Goal; willBeCompleted: boolean; actualDelta: number } {
-  const currentRecord = habit.history[dateStr] || { completed: false, quantity: 0 };
-  const willBeCompleted = !currentRecord.completed;
+  const currentRecord = habit.history[dateStr];
+  const currentManualDone =
+    currentRecord?.manualCompleted ?? (!currentRecord?.activityContributions ? !!currentRecord?.completed : false);
+  const willBeCompleted = !currentManualDone;
   const { updatedHabit, updatedGoal, actualDelta } = applyHabitCompletionStatus(
     habit,
     linkedGoal,
@@ -587,6 +640,154 @@ export function applyHabitToggle(
     willBeCompleted
   );
   return { updatedHabit, updatedGoal, willBeCompleted, actualDelta };
+}
+
+/**
+ * Applies adding or updating an activity's contribution on a habit and linked goal
+ */
+export function applyActivityContributionToHabit(
+  habit: Habit,
+  linkedGoal: Goal | undefined,
+  activity: Activity,
+  referenceDateStr: string = getDateStringInTimezone()
+): { updatedHabit: Habit; updatedGoal?: Goal; actualDelta: number } {
+  const dateStr = activity.localDate;
+  const currentRecord = habit.history[dateStr];
+  const prevContributions = currentRecord?.activityContributions || {};
+
+  const nextContributions = {
+    ...prevContributions,
+    [activity.id]: {
+      quantity: activity.quantity,
+      timestamp: activity.createdAt,
+    },
+  };
+
+  const updatedRecord = syncHabitDayRecord(
+    {
+      ...currentRecord,
+      activityContributions: nextContributions,
+      timestamp: activity.createdAt,
+    },
+    habit
+  );
+
+  const prevQty = currentRecord?.quantity || 0;
+  const newQty = updatedRecord.quantity || 0;
+  const actualDelta = newQty - prevQty;
+
+  const updatedHistory: Record<string, HabitDayRecord> = {
+    ...habit.history,
+    [dateStr]: updatedRecord,
+  };
+
+  const streakStats = calculateHabitStreakAndStats(
+    updatedHistory,
+    habit.frequency,
+    habit.daysOfWeek,
+    habit.targetDaysPerWeek,
+    referenceDateStr,
+    habit.bestStreak
+  );
+
+  const updatedHabit: Habit = {
+    ...habit,
+    history: updatedHistory,
+    currentQuantityToday: updatedHistory[referenceDateStr]?.quantity ?? 0,
+    streak: streakStats.streak,
+    bestStreak: streakStats.bestStreak,
+    weeklyCompletions: streakStats.weeklyCompletions,
+  };
+
+  let updatedGoal: Goal | undefined;
+  if (linkedGoal && areUnitsCompatible(habit.unit, linkedGoal.unit) && actualDelta !== 0) {
+    const isDecrease = linkedGoal.goalType === 'decrease';
+    const nextVal = isDecrease
+      ? Math.max(0, linkedGoal.currentValue - actualDelta)
+      : Math.max(0, linkedGoal.currentValue + actualDelta);
+
+    const isAchieved = isDecrease ? nextVal <= linkedGoal.targetValue : nextVal >= linkedGoal.targetValue;
+
+    updatedGoal = {
+      ...linkedGoal,
+      currentValue: nextVal,
+      status: isAchieved ? 'achieved' : 'active',
+    };
+  }
+
+  return { updatedHabit, updatedGoal, actualDelta };
+}
+
+/**
+ * Removes an activity's contribution from a habit and linked goal
+ */
+export function removeActivityContributionFromHabit(
+  habit: Habit,
+  linkedGoal: Goal | undefined,
+  activityId: string,
+  activityDate: string,
+  referenceDateStr: string = getDateStringInTimezone()
+): { updatedHabit: Habit; updatedGoal?: Goal; actualDelta: number } {
+  const currentRecord = habit.history[activityDate];
+  if (!currentRecord || !currentRecord.activityContributions || !currentRecord.activityContributions[activityId]) {
+    return { updatedHabit: habit, updatedGoal: linkedGoal, actualDelta: 0 };
+  }
+
+  const nextContributions = { ...currentRecord.activityContributions };
+  delete nextContributions[activityId];
+
+  const updatedRecord = syncHabitDayRecord(
+    {
+      ...currentRecord,
+      activityContributions: Object.keys(nextContributions).length > 0 ? nextContributions : undefined,
+    },
+    habit
+  );
+
+  const prevQty = currentRecord.quantity || 0;
+  const newQty = updatedRecord.quantity || 0;
+  const actualDelta = newQty - prevQty; // this will be negative or 0
+
+  const updatedHistory: Record<string, HabitDayRecord> = {
+    ...habit.history,
+    [activityDate]: updatedRecord,
+  };
+
+  const streakStats = calculateHabitStreakAndStats(
+    updatedHistory,
+    habit.frequency,
+    habit.daysOfWeek,
+    habit.targetDaysPerWeek,
+    referenceDateStr,
+    habit.bestStreak
+  );
+
+  const updatedHabit: Habit = {
+    ...habit,
+    history: updatedHistory,
+    currentQuantityToday: updatedHistory[referenceDateStr]?.quantity ?? 0,
+    streak: streakStats.streak,
+    bestStreak: streakStats.bestStreak,
+    weeklyCompletions: streakStats.weeklyCompletions,
+  };
+
+  let updatedGoal: Goal | undefined;
+  if (linkedGoal && areUnitsCompatible(habit.unit, linkedGoal.unit) && actualDelta !== 0) {
+    const isDecrease = linkedGoal.goalType === 'decrease';
+    const nextVal = isDecrease
+      ? Math.max(0, linkedGoal.currentValue - actualDelta)
+      : Math.max(0, linkedGoal.currentValue + actualDelta);
+
+    const isAchieved = isDecrease ? nextVal <= linkedGoal.targetValue : nextVal >= linkedGoal.targetValue;
+
+    updatedGoal = {
+      ...linkedGoal,
+      currentValue: nextVal,
+      status: isAchieved ? 'achieved' : 'active',
+    };
+  }
+
+  return { updatedHabit, updatedGoal, actualDelta };
 }
 
 export interface HabitIntakeRequest {
@@ -867,16 +1068,50 @@ export function getPreviousDayOfWeekYMD(refDateYMD: string, targetDay: number): 
 }
 
 /**
+ * Validates HH:mm time format (00:00 to 23:59)
+ */
+export function validateTimeHHMM(timeStr: string): boolean {
+  if (typeof timeStr !== 'string') return false;
+  return /^([01]\d|2[0-3]):([0-5]\d)$/.test(timeStr.trim());
+}
+
+/**
+ * Returns the YYYY-MM-DD date when a completed task was actually completed in the given timezone.
+ *
+ * Fallback rule:
+ * If completedAt is missing (e.g. legacy data imported from older versions) or invalid,
+ * fall back to the task's scheduled `date` (YYYY-MM-DD).
+ */
+export function getTaskCompletionDateInTimezone(task: Task, timezone: string = 'Asia/Tashkent'): string {
+  if (task.completedAt) {
+    try {
+      const iana = getIanaTimezone(timezone);
+      const d = new Date(task.completedAt);
+      if (!isNaN(d.getTime())) {
+        return getDateStringInTimezone(d, iana);
+      }
+    } catch {
+      // fallback below
+    }
+  }
+  return task.date;
+}
+
+/**
  * Validates Activity payload against domain rules:
  * - Title is non-empty string
  * - localDate is valid YMD and NOT in the future (<= todayStr)
+ * - time, if present, is valid HH:mm
  * - category is a recognized ActivityCategory
  * - durationMinutes, if present, is a positive finite number (> 0)
  * - quantity, if present, is a positive finite number (> 0)
+ * - linkedHabitId, if present, must exist in active habits; unit/quantity compatibility enforced
+ * - linkedTaskId, if present, must exist in tasks
  */
 export function validateActivity(
   activity: Partial<Activity>,
-  todayStr: string
+  todayStr: string,
+  context?: { habits?: Habit[]; tasks?: Task[] }
 ): { isValid: boolean; error?: string } {
   if (!activity || typeof activity !== 'object') {
     return { isValid: false, error: "Faoliyat ma'lumotlari kiritilmagan." };
@@ -897,6 +1132,12 @@ export function validateActivity(
     return { isValid: false, error: `Bajarilgan faoliyat kelajak sanasiga (${localDate}) kiritilishi mumkin emas.` };
   }
 
+  if (activity.time !== undefined && activity.time !== null && activity.time !== '') {
+    if (!validateTimeHHMM(activity.time)) {
+      return { isValid: false, error: `Vaqt formati noto'g'ri (HH:mm bo'lishi kerak): "${activity.time}"` };
+    }
+  }
+
   if (activity.category) {
     if (!ACTIVITY_CATEGORIES.includes(activity.category as ActivityCategory)) {
       return { isValid: false, error: `Noma'lum faoliyat toifasi: "${activity.category}"` };
@@ -912,6 +1153,31 @@ export function validateActivity(
   if (activity.quantity !== undefined && activity.quantity !== null) {
     if (typeof activity.quantity !== 'number' || !Number.isFinite(activity.quantity) || activity.quantity <= 0) {
       return { isValid: false, error: "Miqdor (quantity) musbat chekli son bo'lishi shart." };
+    }
+  }
+
+  if (context?.habits && activity.linkedHabitId) {
+    const targetHabit = context.habits.find(h => h.id === activity.linkedHabitId);
+    if (!targetHabit) {
+      return { isValid: false, error: "Bog'langan odat topilmadi." };
+    }
+    if (targetHabit.isArchived) {
+      return { isValid: false, error: "Arxivlangan odatga faoliyat bog'lab bo'lmaydi." };
+    }
+    if (targetHabit.hasQuantity) {
+      if (activity.quantity === undefined || activity.quantity === null) {
+        return { isValid: false, error: `Ushbu odat miqdorli (${targetHabit.unit || 'birlik'}), faoliyatda miqdor ko'rsatilishi shart.` };
+      }
+      if (activity.unit && targetHabit.unit && !areUnitsCompatible(activity.unit, targetHabit.unit)) {
+        return { isValid: false, error: `Birliklar mos kelmadi: faoliyat birligi "${activity.unit}", odat birligi "${targetHabit.unit}".` };
+      }
+    }
+  }
+
+  if (context?.tasks && activity.linkedTaskId) {
+    const targetTask = context.tasks.find(t => t.id === activity.linkedTaskId);
+    if (!targetTask) {
+      return { isValid: false, error: "Bog'langan vazifa topilmadi." };
     }
   }
 
@@ -972,13 +1238,16 @@ export function getCalendarPeriodBounds(
  * - Total duration of entries with duration (no fabricated duration!)
  * - Quantities grouped strictly by unit (never adding minutes, pages, and km together)
  * - Standalone habit completions deduplicated against linked activities
+ * - Completed tasks deduplicated against linkedTaskId activities
+ * - Actual completion dates resolved in user timezone with fallback to task.date
  */
 export function calculateCalendarPeriodSummary(
   activities: Activity[],
   habits: Habit[],
   tasks: Task[],
   period: 'hafta' | 'oy' | 'yil',
-  refDateStr: string
+  refDateStr: string,
+  timezone: string = 'Asia/Tashkent'
 ): CalendarPeriodSummary {
   const { startDate, endDate } = getCalendarPeriodBounds(period, refDateStr);
 
@@ -1043,12 +1312,24 @@ export function calculateCalendarPeriodSummary(
     }
   }
 
-  // Completed tasks count in period
-  const completedTasks = tasks.filter(
-    t => t.status === 'completed' && t.date && t.date >= startDate && t.date <= endDate
+  // Completed tasks count in period (using actual completion date in user timezone)
+  const linkedTaskIdsInPeriod = new Set(
+    periodActivities.map(a => a.linkedTaskId).filter(Boolean) as string[]
   );
-  completedTasks.forEach(t => {
-    if (t.date) totalActiveDaysSet.add(t.date);
+
+  const completedTasksInPeriod = tasks.filter(t => {
+    if (t.status !== 'completed') return false;
+    const compDate = getTaskCompletionDateInTimezone(t, timezone);
+    return compDate >= startDate && compDate <= endDate;
+  });
+
+  const standaloneCompletedTasks = completedTasksInPeriod.filter(
+    t => !linkedTaskIdsInPeriod.has(t.id)
+  );
+
+  standaloneCompletedTasks.forEach(t => {
+    const compDate = getTaskCompletionDateInTimezone(t, timezone);
+    totalActiveDaysSet.add(compDate);
   });
 
   return {
@@ -1063,7 +1344,7 @@ export function calculateCalendarPeriodSummary(
     durationsCount,
     unitQuantities,
     standaloneHabitCompletions,
-    completedTasksCount: completedTasks.length,
-    totalEventsCount: totalActivities + standaloneHabitCompletions + completedTasks.length,
+    completedTasksCount: standaloneCompletedTasks.length,
+    totalEventsCount: totalActivities + standaloneHabitCompletions + standaloneCompletedTasks.length,
   };
 }

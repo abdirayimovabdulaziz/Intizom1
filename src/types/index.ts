@@ -21,6 +21,20 @@ export interface Task {
 export type HabitFrequency = 'daily' | 'weekly_target' | 'specific_days';
 export type HabitType = 'general' | 'supplement_health';
 
+export interface HabitActivityContribution {
+  quantity?: number;
+  timestamp?: string;
+}
+
+export interface HabitDayRecord {
+  completed: boolean;
+  quantity?: number;
+  timestamp?: string;
+  manualCompleted?: boolean;
+  manualQuantity?: number;
+  activityContributions?: Record<string, HabitActivityContribution>;
+}
+
 export interface Habit {
   id: string;
   title: string;
@@ -38,7 +52,7 @@ export interface Habit {
   bestStreak: number;
   currentQuantityToday?: number;
   weeklyCompletions?: number;
-  history: Record<string, { completed: boolean; quantity?: number; timestamp?: string }>;
+  history: Record<string, HabitDayRecord>;
   linkedGoalId?: string;
   notes?: string;
   isArchived?: boolean;
@@ -92,8 +106,9 @@ export interface Activity {
   quantity?: number; // positive finite number
   unit?: string;
   notes?: string;
-  linkedHabitId?: string;
-  linkedTaskId?: string;
+  linkedHabitId?: string | null;
+  linkedTaskId?: string | null;
+  operationId?: string;
   source: 'bot' | 'manual';
   createdAt: string; // ISO string
   isArchived?: boolean;
@@ -154,6 +169,7 @@ export interface ParsedItem {
   activityCategory?: ActivityCategory | null;
   linkedHabitId?: string | null;
   linkedTaskId?: string | null;
+  operationId?: string | null;
   dosage?: string | null;
   timeSlot?: string | null;
   daysOfWeek?: number[] | null;

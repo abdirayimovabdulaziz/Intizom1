@@ -17,6 +17,8 @@ import {
   getCalendarPeriodBounds,
   calculateCalendarPeriodSummary,
   getPreviousDayOfWeekYMD,
+  getTaskCompletionDateInTimezone,
+  validateTimeHHMM,
 } from '../utils/domainCalculations';
 import { Habit, Goal, Task, GoalInternalHabit, Activity } from '../types';
 import {
@@ -607,6 +609,7 @@ console.log('=== KUNLIK YORDAMCHI DOMEN TESTLARI ===\n');
 // Test M: domainReducer mustaqil sof funksiyasini to'g'ridan-to'g'ri tekshirish
 {
   const initialState: DomainState = {
+    activities: [],
     habits: [
       {
         id: 'h-reducer-1',
@@ -819,7 +822,7 @@ console.log('=== KUNLIK YORDAMCHI DOMEN TESTLARI ===\n');
   assert(decision3.action === 'mark_completed', 'p3) Aniq habit ID bo\'yicha mark_completed qaytariladi');
 
   const stateAfterDone = domainReducer(
-    { habits: existingHabits, goals: [] },
+    { activities: [], habits: existingHabits, goals: [] },
     {
       type: 'SET_HABIT_COMPLETION_TODAY',
       habitId: 'h-creatine-1',
@@ -928,7 +931,7 @@ console.log('=== KUNLIK YORDAMCHI DOMEN TESTLARI ===\n');
 
   // Reducer ga qo'llanganda uni bekor qilmaydi (completed: true saqlanadi)
   const stateReconfirm = domainReducer(
-    { habits: [alreadyDoneHabit], goals: [] },
+    { activities: [], habits: [alreadyDoneHabit], goals: [] },
     {
       type: 'SET_HABIT_COMPLETION_TODAY',
       habitId: 'h-already-done',
@@ -1195,6 +1198,585 @@ console.log('=== KUNLIK YORDAMCHI DOMEN TESTLARI ===\n');
   // Dushanba (1): 2026-10-26
   const prevMonday = getPreviousDayOfWeekYMD(refDate, 1);
   assert(prevMonday === '2026-10-26', 't2) 2026-10-30 Jumadan oldingi dushanba 2026-10-26');
+}
+
+// ============================================================================
+// SECTION 6: Production oqimini tekshiradigan testlar
+// ============================================================================
+
+// Test U: Qo‘lda 10 bet + faoliyatdan 20 bet = 30; faoliyat o‘chirilsa 10 qoladi
+{
+  const habitBook: Habit = {
+    id: 'h-book-prod',
+    title: 'Kitob o\'qish',
+    category: 'odat',
+    frequency: 'daily',
+    daysOfWeek: [1, 2, 3, 4, 5, 6, 7],
+    hasQuantity: true,
+    targetQuantity: 25,
+    unit: 'bet',
+    streak: 0,
+    bestStreak: 0,
+    history: {},
+  };
+
+  let state: DomainState = {
+    activities: [],
+    habits: [habitBook],
+    goals: [],
+  };
+
+  // 1. Qo'lda 10 bet kiritish
+  state = domainReducer(state, {
+    type: 'LOG_HABIT_QUANTITY',
+    habitId: 'h-book-prod',
+    amount: 10,
+    dateStr: '2026-10-30',
+    timestamp: '2026-10-30T10:00:00Z',
+  });
+
+  assert(state.habits[0].history['2026-10-30']?.quantity === 10, 'u1) Qo\'lda 10 bet kiritildi');
+  assert(state.habits[0].history['2026-10-30']?.completed === false, 'u1) 10 < 25 bo\'lgani uchun hali completed false');
+
+  // 2. Faoliyat orqali 20 bet qo'shish
+  const actBook: Activity = {
+    id: 'act-book-1',
+    title: 'Kechki mutolaa',
+    localDate: '2026-10-30',
+    category: 'talim',
+    quantity: 20,
+    unit: 'bet',
+    linkedHabitId: 'h-book-prod',
+    source: 'manual',
+    createdAt: '2026-10-30T19:00:00Z',
+  };
+
+  state = domainReducer(state, {
+    type: 'ADD_ACTIVITY',
+    activity: actBook,
+    dateStr: '2026-10-30',
+  });
+
+  assert(state.habits[0].history['2026-10-30']?.quantity === 30, 'u2) 10 + 20 = 30 bet bo\'ldi');
+  assert(state.habits[0].history['2026-10-30']?.completed === true, 'u2) 30 >= 25 bo\'lgani uchun completed true');
+  assert(state.activities.length === 1, 'u2) Faoliyatlar ro\'yxatida 1 ta yozuv mavjud');
+
+  // 3. Faoliyat o'chirilsa, aynan uning 20 bet hissasi olinib, qo'lda kiritilgan 10 bet qoladi
+  state = domainReducer(state, {
+    type: 'DELETE_ACTIVITY',
+    id: 'act-book-1',
+    dateStr: '2026-10-30',
+  });
+
+  assert(state.habits[0].history['2026-10-30']?.quantity === 10, 'u3) Faoliyat o\'chirilgach, qo\'lda kiritilgan 10 bet saqlanib qoldi');
+  assert(state.habits[0].history['2026-10-30']?.completed === false, 'u3) 10 < 25 bo\'lgani uchun completed false ga qaytdi');
+  assert(state.activities.length === 0, 'u3) Faoliyat o\'chirildi');
+}
+
+// Test V: Oldindan qo‘lda bajarilgan miqdorsiz odat, bog‘langan faoliyat qo‘shilib/o‘chirilganda bajarilganligicha qoladi
+{
+  const habitGym: Habit = {
+    id: 'h-gym-prod',
+    title: 'Zal mashg\'uloti',
+    category: 'odat',
+    frequency: 'daily',
+    daysOfWeek: [1, 2, 3, 4, 5, 6, 7],
+    hasQuantity: false,
+    streak: 0,
+    bestStreak: 0,
+    history: {},
+  };
+
+  let state: DomainState = {
+    activities: [],
+    habits: [habitGym],
+    goals: [],
+  };
+
+  // 1. Foydalanuvchi odatni qo'lda checkbox orqali bajardi deb belgiladi
+  state = domainReducer(state, {
+    type: 'SET_HABIT_COMPLETION_TODAY',
+    habitId: 'h-gym-prod',
+    completed: true,
+    dateStr: '2026-10-30',
+    timestamp: '2026-10-30T09:00:00Z',
+  });
+
+  assert(state.habits[0].history['2026-10-30']?.completed === true, 'v1) Odat qo\'lda bajarilgan deb belgilandi');
+
+  // 2. Bog'langan faoliyat qo'shildi
+  const actGym: Activity = {
+    id: 'act-gym-1',
+    title: 'Katta mashg\'ulot',
+    localDate: '2026-10-30',
+    category: 'sport',
+    durationMinutes: 60,
+    linkedHabitId: 'h-gym-prod',
+    source: 'manual',
+    createdAt: '2026-10-30T10:00:00Z',
+  };
+
+  state = domainReducer(state, {
+    type: 'ADD_ACTIVITY',
+    activity: actGym,
+    dateStr: '2026-10-30',
+  });
+
+  assert(state.habits[0].history['2026-10-30']?.completed === true, 'v2) Faoliyat qo\'shilgach ham bajarilgan');
+
+  // 3. Faoliyat o'chirilsa, oldindan qo'lda belgilangan bajarilganlik yo'qolmaydi!
+  state = domainReducer(state, {
+    type: 'DELETE_ACTIVITY',
+    id: 'act-gym-1',
+    dateStr: '2026-10-30',
+  });
+
+  assert(state.habits[0].history['2026-10-30']?.completed === true, 'v3) Faoliyat o\'chirilgach, qo\'lda bajarilganlik saqlanib qoldi!');
+
+  // Kontrast holat: agar qo'lda bajarilmagan bo'lsa (manualCompleted = false)
+  const actGym2: Activity = {
+    id: 'act-gym-2',
+    title: 'Kechki yugurish',
+    localDate: '2026-10-29',
+    category: 'sport',
+    durationMinutes: 30,
+    linkedHabitId: 'h-gym-prod',
+    source: 'manual',
+    createdAt: '2026-10-29T18:00:00Z',
+  };
+
+  state = domainReducer(state, {
+    type: 'ADD_ACTIVITY',
+    activity: actGym2,
+    dateStr: '2026-10-30',
+  });
+
+  assert(state.habits[0].history['2026-10-29']?.completed === true, 'v4) 29-kunda faoliyat hisobiga completed true bo\'ldi');
+
+  state = domainReducer(state, {
+    type: 'DELETE_ACTIVITY',
+    id: 'act-gym-2',
+    dateStr: '2026-10-30',
+  });
+
+  assert(state.habits[0].history['2026-10-29']?.completed === false, 'v5) Faoliyat o\'chirilgach, avval qo\'lda kiritilmagan kun completed false ga qaytdi');
+}
+
+// Test W: Quantity edit, date change, relink va unlink hissani to‘g‘ri ko‘chiradi
+{
+  const habitA: Habit = {
+    id: 'h-A',
+    title: 'Odat A',
+    category: 'odat',
+    frequency: 'daily',
+    daysOfWeek: [1, 2, 3, 4, 5, 6, 7],
+    hasQuantity: true,
+    targetQuantity: 50,
+    unit: 'bet',
+    streak: 0,
+    bestStreak: 0,
+    history: {},
+  };
+
+  const habitB: Habit = {
+    id: 'h-B',
+    title: 'Odat B',
+    category: 'odat',
+    frequency: 'daily',
+    daysOfWeek: [1, 2, 3, 4, 5, 6, 7],
+    hasQuantity: true,
+    targetQuantity: 50,
+    unit: 'bet',
+    streak: 0,
+    bestStreak: 0,
+    history: {},
+  };
+
+  let state: DomainState = {
+    activities: [],
+    habits: [habitA, habitB],
+    goals: [],
+  };
+
+  // Habit A ga 2026-10-28 sanasida qo'lda 10 bet
+  state = domainReducer(state, {
+    type: 'LOG_HABIT_QUANTITY',
+    habitId: 'h-A',
+    amount: 10,
+    dateStr: '2026-10-28',
+    timestamp: '2026-10-28T09:00:00Z',
+  });
+
+  // Faoliyat qo'shiladi: Habit A ga 20 bet (jami 30)
+  const act: Activity = {
+    id: 'act-transfer',
+    title: 'O\'qish',
+    localDate: '2026-10-28',
+    category: 'talim',
+    quantity: 20,
+    unit: 'bet',
+    linkedHabitId: 'h-A',
+    source: 'manual',
+    createdAt: '2026-10-28T10:00:00Z',
+  };
+
+  state = domainReducer(state, {
+    type: 'ADD_ACTIVITY',
+    activity: act,
+    dateStr: '2026-10-30',
+  });
+
+  const getH = (id: string) => state.habits.find(h => h.id === id)!;
+  assert(getH('h-A').history['2026-10-28']?.quantity === 30, 'w1) Boshlang\'ich: 10 + 20 = 30');
+
+  // 1. Quantity edit: miqdorni 20 dan 25 ga oshirish
+  state = domainReducer(state, {
+    type: 'UPDATE_ACTIVITY',
+    id: 'act-transfer',
+    updates: { quantity: 25 },
+    dateStr: '2026-10-30',
+  });
+  assert(getH('h-A').history['2026-10-28']?.quantity === 35, 'w2) Miqdor tahrirlangach: 10 + 25 = 35');
+
+  // 2. Date change: sanani 2026-10-28 dan 2026-10-29 ga ko'chirish
+  state = domainReducer(state, {
+    type: 'UPDATE_ACTIVITY',
+    id: 'act-transfer',
+    updates: { localDate: '2026-10-29' },
+    dateStr: '2026-10-30',
+  });
+  assert(getH('h-A').history['2026-10-28']?.quantity === 10, 'w3) 28-sanada yana faqat qo\'lda kiritilgan 10 bet qoldi');
+  assert(getH('h-A').history['2026-10-29']?.quantity === 25, 'w3) 29-sanaga 25 bet muvaffaqiyatli ko\'chdi');
+
+  // 3. Relink: Habit A dan Habit B ga qayta bog'lash
+  state = domainReducer(state, {
+    type: 'UPDATE_ACTIVITY',
+    id: 'act-transfer',
+    updates: { linkedHabitId: 'h-B' },
+    dateStr: '2026-10-30',
+  });
+  assert((getH('h-A').history['2026-10-29']?.quantity || 0) === 0, 'w4) Habit A ning 29-sanasidan hissa olib tashlandi');
+  assert(getH('h-B').history['2026-10-29']?.quantity === 25, 'w4) Habit B ning 29-sanasiga 25 bet qo\'shildi');
+
+  // 4. Unlink: Bog'lanishni butunlay olib tashlash (linkedHabitId: null)
+  state = domainReducer(state, {
+    type: 'UPDATE_ACTIVITY',
+    id: 'act-transfer',
+    updates: { linkedHabitId: null },
+    dateStr: '2026-10-30',
+  });
+  assert((getH('h-B').history['2026-10-29']?.quantity || 0) === 0, 'w5) Unlink qilinganda Habit B dan hissa olindi');
+}
+
+// Test X: Bog‘langan maqsadga faqat haqiqiy farq qo‘llanadi
+{
+  const goalBooks: Goal = {
+    id: 'g-books',
+    title: '300 bet o\'qish',
+    category: 'maqsad',
+    deadline: '2026-12-31',
+    targetValue: 300,
+    currentValue: 100, // oldingi boshqa progress
+    unit: 'bet',
+    linkedHabitIds: ['h-read'],
+    status: 'active',
+  };
+
+  const habitRead: Habit = {
+    id: 'h-read',
+    title: 'Kitob',
+    category: 'odat',
+    frequency: 'daily',
+    daysOfWeek: [1, 2, 3, 4, 5, 6, 7],
+    hasQuantity: true,
+    targetQuantity: 20,
+    unit: 'bet',
+    streak: 0,
+    bestStreak: 0,
+    linkedGoalId: 'g-books',
+    history: {},
+  };
+
+  let state: DomainState = {
+    activities: [],
+    habits: [habitRead],
+    goals: [goalBooks],
+  };
+
+  // 1. Faoliyat orqali 20 bet qo'shiladi -> Maqsad 100 + 20 = 120
+  const actRead: Activity = {
+    id: 'act-read-1',
+    title: 'Mutolaa',
+    localDate: '2026-10-30',
+    category: 'talim',
+    quantity: 20,
+    unit: 'bet',
+    linkedHabitId: 'h-read',
+    source: 'manual',
+    createdAt: '2026-10-30T10:00:00Z',
+  };
+
+  state = domainReducer(state, {
+    type: 'ADD_ACTIVITY',
+    activity: actRead,
+    dateStr: '2026-10-30',
+  });
+
+  assert(state.goals[0].currentValue === 120, 'x1) Maqsad qiymati 100 + 20 = 120 bo\'ldi');
+
+  // 2. Faoliyat miqdori 20 dan 35 ga o'zgartiriladi -> Farq +15 -> Maqsad 120 + 15 = 135
+  state = domainReducer(state, {
+    type: 'UPDATE_ACTIVITY',
+    id: 'act-read-1',
+    updates: { quantity: 35 },
+    dateStr: '2026-10-30',
+  });
+
+  assert(state.goals[0].currentValue === 135, 'x2) Maqsadga faqat haqiqiy farq (+15) qo\'llanib, 135 bo\'ldi');
+
+  // 3. Faoliyat o'chiriladi -> 35 to'liq qaytariladi -> Maqsad 100 ga qaytadi
+  state = domainReducer(state, {
+    type: 'DELETE_ACTIVITY',
+    id: 'act-read-1',
+    dateStr: '2026-10-30',
+  });
+
+  assert(state.goals[0].currentValue === 100, 'x3) Faoliyat o\'chirilgach, maqsad 100 ga qaytdi');
+}
+
+// Test Y: Bir operationId ikki marta yuborilganda bitta yozuv
+{
+  let state: DomainState = {
+    activities: [],
+    habits: [],
+    goals: [],
+  };
+
+  const actDup: Activity = {
+    id: 'act-dup-1',
+    operationId: 'op-stable-123',
+    title: 'Zal mashqi',
+    localDate: '2026-10-30',
+    category: 'sport',
+    durationMinutes: 45,
+    source: 'bot',
+    createdAt: '2026-10-30T11:00:00Z',
+  };
+
+  state = domainReducer(state, {
+    type: 'ADD_ACTIVITY',
+    activity: actDup,
+    dateStr: '2026-10-30',
+  });
+
+  assert(state.activities.length === 1, 'y1) Birinchi marta qo\'shilganda 1 ta faoliyat yaratildi');
+
+  // Bir xil operationId bilan qayta yuborilganda dublikat qo'shilmaydi
+  const actDup2: Activity = {
+    id: 'act-dup-2', // ID har xil bo'lsa ham
+    operationId: 'op-stable-123', // operationId bir xil!
+    title: 'Zal mashqi',
+    localDate: '2026-10-30',
+    category: 'sport',
+    durationMinutes: 45,
+    source: 'bot',
+    createdAt: '2026-10-30T11:00:01Z',
+  };
+
+  state = domainReducer(state, {
+    type: 'ADD_ACTIVITY',
+    activity: actDup2,
+    dateStr: '2026-10-30',
+  });
+
+  assert(state.activities.length === 1, 'y2) Bir xil operationId qayta yuborilganda dublikat yozuv qo\'shilmadi');
+}
+
+// Test Z: Bir kunda ikki alohida mashg‘ulot (2 faoliyat, 1 faol kun)
+{
+  const actM1: Activity = {
+    id: 'act-m1',
+    operationId: 'op-m1',
+    title: 'Ertalabki yugurish',
+    localDate: '2026-10-30',
+    category: 'sport',
+    durationMinutes: 30,
+    source: 'manual',
+    createdAt: '2026-10-30T07:00:00Z',
+  };
+
+  const actM2: Activity = {
+    id: 'act-m2',
+    operationId: 'op-m2',
+    title: 'Kechki suzish',
+    localDate: '2026-10-30',
+    category: 'sport',
+    durationMinutes: 45,
+    source: 'manual',
+    createdAt: '2026-10-30T19:00:00Z',
+  };
+
+  let state: DomainState = {
+    activities: [],
+    habits: [],
+    goals: [],
+  };
+
+  state = domainReducer(state, { type: 'ADD_ACTIVITY', activity: actM1, dateStr: '2026-10-30' });
+  state = domainReducer(state, { type: 'ADD_ACTIVITY', activity: actM2, dateStr: '2026-10-30' });
+
+  assert(state.activities.length === 2, 'z1) Ikkala alohida mashg\'ulot ham saqlandi');
+
+  const summary = calculateCalendarPeriodSummary(
+    state.activities,
+    state.habits,
+    [],
+    'hafta',
+    '2026-10-30'
+  );
+
+  assert(summary.totalActivities === 2, 'z2) Jami faoliyatlar soni 2 ta');
+  assert(summary.activeDaysCount === 1, 'z2) Bir kundagi 2 mashg\'ulot aynan 1 faol kun sanaladi');
+  assert(summary.totalDurationMinutes === 75, 'z2) Jami davomiylik 30 + 45 = 75 daqiqa');
+}
+
+// Test AA: Reja sanasi va haqiqiy bajarilish sanasi farqi
+{
+  // Vazifa 2026-10-20 ga rejalashtirilgan, lekin 2026-10-25 da bajarilgan
+  const taskLate: Task = {
+    id: 'task-late-1',
+    title: 'Kechikkan hisobot',
+    category: 'vazifa',
+    date: '2026-10-20',
+    status: 'completed',
+    completedAt: '2026-10-25T08:30:00.000Z',
+    priority: 'high',
+    source: 'miniapp',
+  };
+
+  const compDate = getTaskCompletionDateInTimezone(taskLate, 'Asia/Tashkent (UTC+5)');
+  assert(compDate === '2026-10-25', 'aa1) Haqiqiy bajarilish sanasi 2026-10-25 bo\'yicha hisoblandi');
+  assert(compDate !== taskLate.date, 'aa1) Reja sanasi (2026-10-20) bilan haqiqiy bajarilish sanasi (2026-10-25) farqi aniqlandi');
+
+  // Eski completedAt bo'lmagan yozuvlar uchun fallback
+  const legacyTask: Task = {
+    id: 'task-legacy',
+    title: 'Eski vazifa',
+    category: 'vazifa',
+    date: '2026-10-22',
+    status: 'completed',
+    priority: 'medium',
+    source: 'miniapp',
+  };
+
+  const legacyCompDate = getTaskCompletionDateInTimezone(legacyTask, 'Asia/Tashkent');
+  assert(legacyCompDate === '2026-10-22', 'aa2) completedAt yo\'q eski yozuv reja sanasiga (date) fallback qiladi');
+}
+
+// Test AB: linkedTaskId bo‘yicha ikki marta sanamaslik
+{
+  const taskDone: Task = {
+    id: 't-meeting-1',
+    title: 'Mijoz bilan uchrashuv',
+    category: 'vazifa',
+    date: '2026-10-30',
+    status: 'completed',
+    completedAt: '2026-10-30T10:00:00Z',
+    priority: 'high',
+    source: 'miniapp',
+  };
+
+  const actMeeting: Activity = {
+    id: 'act-meet-1',
+    title: 'Mijoz bilan uchrashuv o\'tkazildi',
+    localDate: '2026-10-30',
+    category: 'ish',
+    durationMinutes: 60,
+    linkedTaskId: 't-meeting-1',
+    source: 'manual',
+    createdAt: '2026-10-30T10:00:00Z',
+  };
+
+  const summary = calculateCalendarPeriodSummary(
+    [actMeeting],
+    [],
+    [taskDone],
+    'hafta',
+    '2026-10-30'
+  );
+
+  assert(summary.totalActivities === 1, 'ab1) Faoliyatlar soni 1 ta');
+  assert(summary.completedTasksCount === 0, 'ab1) linkedTaskId tufayli bajarilgan vazifa alohida takror sanalmadi (0 ta standalone)');
+  assert(summary.totalEventsCount === 1, 'ab1) Jami voqealar soni 1 ta (ikki marta hisoblanmadi)');
+}
+
+// Test AC: Noto‘g‘ri edit va import barcha state’ni o‘z holatida qoldirishi
+{
+  const habitGym: Habit = {
+    id: 'h-gym-ac',
+    title: 'Zal',
+    category: 'odat',
+    frequency: 'daily',
+    daysOfWeek: [1, 2, 3, 4, 5, 6, 7],
+    hasQuantity: false,
+    streak: 0,
+    bestStreak: 0,
+    history: {},
+  };
+
+  const actValid: Activity = {
+    id: 'act-valid-1',
+    title: 'Mashg\'ulot',
+    localDate: '2026-10-29',
+    category: 'sport',
+    durationMinutes: 50,
+    linkedHabitId: 'h-gym-ac',
+    source: 'manual',
+    createdAt: '2026-10-29T10:00:00Z',
+  };
+
+  let state: DomainState = {
+    activities: [actValid],
+    habits: [habitGym],
+    goals: [],
+  };
+
+  // 1. Noto'g'ri edit: kelajak sanasini qo'yish (masalan 2099-01-01)
+  const stateFuture = domainReducer(state, {
+    type: 'UPDATE_ACTIVITY',
+    id: 'act-valid-1',
+    updates: { localDate: '2099-01-01' },
+    dateStr: '2026-10-30',
+  });
+  assert(stateFuture === state, 'ac1) Kelajak sanasiga tahrirlash rad etildi, state o\'z holatida qoldi');
+
+  // 2. Noto'g'ri edit: manfiy davomiylik
+  const stateNeg = domainReducer(state, {
+    type: 'UPDATE_ACTIVITY',
+    id: 'act-valid-1',
+    updates: { durationMinutes: -30 },
+    dateStr: '2026-10-30',
+  });
+  assert(stateNeg === state, 'ac2) Manfiy davomiylik rad etildi, state o\'z holatida qoldi');
+
+  // 3. Noto'g'ri edit: mavjud bo'lmagan odatga bog'lash
+  const stateNoHabit = domainReducer(state, {
+    type: 'UPDATE_ACTIVITY',
+    id: 'act-valid-1',
+    updates: { linkedHabitId: 'non-existent-habit' },
+    dateStr: '2026-10-30',
+  });
+  assert(stateNoHabit === state, 'ac3) Mavjud bo\'lmagan odatga bog\'lash rad etildi, state o\'z holatida qoldi');
+
+  // 4. validateActivity testlari:
+  const v1 = validateActivity({ title: 'Test', localDate: '2026-02-31' }, '2026-10-30');
+  assert(!v1.isValid, 'ac4) Mavjud bo\'lmagan kalendar sanasi (2026-02-31) rad etildi');
+
+  const v2 = validateActivity({ title: 'Test', localDate: '2026-10-30', time: '25:99' }, '2026-10-30');
+  assert(!v2.isValid, 'ac5) Noto\'g\'ri vaqt formati (25:99) rad etildi');
+
+  const v3 = validateActivity({ title: 'Test', localDate: '2026-10-30', time: '14:30' }, '2026-10-30');
+  assert(v3.isValid, 'ac6) To\'g\'ri vaqt formati (14:30) qabul qilindi');
 }
 
 console.log(`\n========================================`);

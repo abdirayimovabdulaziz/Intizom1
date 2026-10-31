@@ -204,10 +204,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
       })();
 
-      return { habits: savedHabits, goals: savedGoals };
+      const savedActivities: Activity[] = (() => {
+        try {
+          const saved = localStorage.getItem(STORAGE_KEY_ACTIVITIES);
+          if (saved) {
+            const parsed: Activity[] = JSON.parse(saved);
+            return Array.isArray(parsed) ? parsed : [];
+          }
+          return [];
+        } catch {
+          return [];
+        }
+      })();
+
+      return { activities: savedActivities, habits: savedHabits, goals: savedGoals };
     }
   );
 
+  const activities = domainState.activities;
   const habits = domainState.habits;
   const goals = domainState.goals;
 
@@ -217,15 +231,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return saved ? JSON.parse(saved) : defaultExpenses;
     } catch {
       return defaultExpenses;
-    }
-  });
-
-  const [activities, setActivities] = useState<Activity[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY_ACTIVITIES);
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
     }
   });
 
@@ -543,7 +548,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Activity methods
   const addActivity = (payload: ActivityCreatePayload): Activity => {
-    const val = validateActivity(payload, activeTodayStr);
+    // 1. OperationId deduplication: prevent double submit
+    if (payload.operationId) {
+      const existing = domainState.activities.find(a => a.operationId === payload.operationId);
+      if (existing) {
+        return existing;
+      }
+    }
+
+    // 2. Pre-validate activity
+    const val = validateActivity(payload, activeTodayStr, { habits: domainState.habits, tasks });
     if (!val.isValid) {
       triggerHaptic('error');
       throw new Error(val.error || "Faoliyat ma'lumotlari noto'g'ri");
@@ -553,100 +567,84 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       id: generateEntityId('act'),
       title: payload.title.trim(),
       localDate: payload.localDate,
-      time: payload.time,
+      time: payload.time ? payload.time.trim() : undefined,
       category: payload.category || 'boshqa',
       durationMinutes: payload.durationMinutes,
       quantity: payload.quantity,
-      unit: payload.unit,
-      notes: payload.notes,
-      linkedHabitId: payload.linkedHabitId,
-      linkedTaskId: payload.linkedTaskId,
+      unit: payload.unit ? payload.unit.trim() : undefined,
+      notes: payload.notes ? payload.notes.trim() : undefined,
+      linkedHabitId: payload.linkedHabitId || undefined,
+      linkedTaskId: payload.linkedTaskId || undefined,
+      operationId: payload.operationId || undefined,
       source: payload.source || 'manual',
       createdAt: new Date().toISOString(),
     };
 
-    if (activity.linkedHabitId) {
-      domainDispatch({
-        type: 'SET_HABIT_COMPLETION_TODAY',
-        habitId: activity.linkedHabitId,
-        completed: true,
-        dateStr: activity.localDate,
-        timestamp: activity.createdAt,
-      });
-    }
+    domainDispatch({
+      type: 'ADD_ACTIVITY',
+      activity,
+      dateStr: activeTodayStr,
+      tasks,
+    });
 
-    setActivities(prev => [activity, ...prev]);
     triggerHaptic('light');
     return activity;
   };
 
   const updateActivity = (id: string, updates: Partial<Activity>) => {
-    const existing = activities.find(a => a.id === id);
+    const existing = domainState.activities.find(a => a.id === id);
     if (!existing) return;
 
-    if (updates.localDate && updates.localDate > activeTodayStr) {
+    const linkedHabitId =
+      updates.linkedHabitId === null
+        ? undefined
+        : updates.linkedHabitId !== undefined
+        ? updates.linkedHabitId || undefined
+        : existing.linkedHabitId;
+
+    const linkedTaskId =
+      updates.linkedTaskId === null
+        ? undefined
+        : updates.linkedTaskId !== undefined
+        ? updates.linkedTaskId || undefined
+        : existing.linkedTaskId;
+
+    const candidate: Activity = {
+      ...existing,
+      ...updates,
+      id: existing.id,
+      createdAt: existing.createdAt,
+      linkedHabitId,
+      linkedTaskId,
+    };
+
+    const val = validateActivity(candidate, activeTodayStr, { habits: domainState.habits, tasks });
+    if (!val.isValid) {
       triggerHaptic('error');
       return;
     }
 
-    const oldHabitId = existing.linkedHabitId;
-    const oldDate = existing.localDate;
-    const newHabitId = updates.linkedHabitId !== undefined ? updates.linkedHabitId : oldHabitId;
-    const newDate = updates.localDate !== undefined ? updates.localDate : oldDate;
+    domainDispatch({
+      type: 'UPDATE_ACTIVITY',
+      id,
+      updates,
+      dateStr: activeTodayStr,
+      tasks,
+    });
 
-    // If habit linkage or date changed, reverse old if no other activity linked to it on that date
-    if (oldHabitId && (oldHabitId !== newHabitId || oldDate !== newDate)) {
-      const otherLinked = activities.some(
-        a => a.id !== id && a.linkedHabitId === oldHabitId && a.localDate === oldDate
-      );
-      if (!otherLinked) {
-        domainDispatch({
-          type: 'SET_HABIT_COMPLETION_TODAY',
-          habitId: oldHabitId,
-          completed: false,
-          dateStr: oldDate,
-          timestamp: new Date().toISOString(),
-        });
-      }
-    }
-
-    // Apply new habit completion
-    if (newHabitId && (newHabitId !== oldHabitId || oldDate !== newDate)) {
-      domainDispatch({
-        type: 'SET_HABIT_COMPLETION_TODAY',
-        habitId: newHabitId,
-        completed: true,
-        dateStr: newDate,
-        timestamp: new Date().toISOString(),
-      });
-    }
-
-    setActivities(prev =>
-      prev.map(a => (a.id === id ? { ...a, ...updates } : a))
-    );
     triggerHaptic('light');
   };
 
   const deleteActivity = (id: string) => {
-    const existing = activities.find(a => a.id === id);
+    const existing = domainState.activities.find(a => a.id === id);
     if (!existing) return;
 
-    if (existing.linkedHabitId) {
-      const otherLinked = activities.some(
-        a => a.id !== id && a.linkedHabitId === existing.linkedHabitId && a.localDate === existing.localDate
-      );
-      if (!otherLinked) {
-        domainDispatch({
-          type: 'SET_HABIT_COMPLETION_TODAY',
-          habitId: existing.linkedHabitId,
-          completed: false,
-          dateStr: existing.localDate,
-          timestamp: new Date().toISOString(),
-        });
-      }
-    }
+    domainDispatch({
+      type: 'DELETE_ACTIVITY',
+      id,
+      dateStr: activeTodayStr,
+    });
 
-    setActivities(prev => prev.filter(a => a.id !== id));
     triggerHaptic('warning');
   };
 
@@ -674,51 +672,136 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const importDataFromJson = (jsonStr: string): { success: boolean; message: string } => {
     try {
       const data = JSON.parse(jsonStr);
-      let loadedCount = 0;
-      if (Array.isArray(data.tasks)) {
-        setTasks(data.tasks);
-        loadedCount += data.tasks.length;
-      }
-      const importedHabits = Array.isArray(data.habits) ? data.habits : habits;
-      const importedGoals = Array.isArray(data.goals) ? data.goals : goals;
-      if (Array.isArray(data.habits)) {
-        loadedCount += data.habits.length;
-      }
-      if (Array.isArray(data.goals)) {
-        loadedCount += data.goals.length;
-      }
-      domainDispatch({
-        type: 'RESET_DOMAIN',
-        habits: importedHabits,
-        goals: importedGoals,
-      });
-
-      if (Array.isArray(data.expenses)) {
-        setExpenses(data.expenses);
-        loadedCount += data.expenses.length;
+      if (!data || typeof data !== 'object') {
+        triggerHaptic('error');
+        return { success: false, message: "JSON fayli noto'g'ri shakllangan." };
       }
 
-      // Activities import with validation, keeping existing if absent in backup
-      if ('activities' in data && Array.isArray(data.activities)) {
-        const validActivities: Activity[] = [];
-        for (const act of data.activities) {
-          if (
-            act &&
-            typeof act === 'object' &&
-            typeof act.id === 'string' &&
-            typeof act.title === 'string' &&
-            typeof act.localDate === 'string'
-          ) {
-            validActivities.push(act);
+      // 1. Tasks validation
+      let candidateTasks: Task[] | undefined;
+      if ('tasks' in data) {
+        if (!Array.isArray(data.tasks)) {
+          triggerHaptic('error');
+          return { success: false, message: "Tasks formati noto'g'ri (massiv bo'lishi kerak)." };
+        }
+        for (const t of data.tasks) {
+          if (!t || typeof t !== 'object' || typeof t.id !== 'string' || !t.id.trim() || typeof t.title !== 'string' || !t.title.trim()) {
+            triggerHaptic('error');
+            return { success: false, message: "Tasks ichida yaroqsiz vazifa topildi." };
           }
         }
-        setActivities(validActivities);
-        loadedCount += validActivities.length;
+        candidateTasks = data.tasks;
       }
+
+      // 2. Habits validation
+      let candidateHabits: Habit[] | undefined;
+      if ('habits' in data) {
+        if (!Array.isArray(data.habits)) {
+          triggerHaptic('error');
+          return { success: false, message: "Habits formati noto'g'ri (massiv bo'lishi kerak)." };
+        }
+        for (const h of data.habits) {
+          if (!h || typeof h !== 'object' || typeof h.id !== 'string' || !h.id.trim() || typeof h.title !== 'string' || !h.title.trim()) {
+            triggerHaptic('error');
+            return { success: false, message: "Habits ichida yaroqsiz odat topildi." };
+          }
+        }
+        candidateHabits = data.habits;
+      }
+
+      // 3. Goals validation
+      let candidateGoals: Goal[] | undefined;
+      if ('goals' in data) {
+        if (!Array.isArray(data.goals)) {
+          triggerHaptic('error');
+          return { success: false, message: "Goals formati noto'g'ri (massiv bo'lishi kerak)." };
+        }
+        for (const g of data.goals) {
+          if (!g || typeof g !== 'object' || typeof g.id !== 'string' || !g.id.trim() || typeof g.title !== 'string' || !g.title.trim()) {
+            triggerHaptic('error');
+            return { success: false, message: "Goals ichida yaroqsiz maqsad topildi." };
+          }
+        }
+        candidateGoals = data.goals;
+      }
+
+      // 4. Expenses validation
+      let candidateExpenses: Expense[] | undefined;
+      if ('expenses' in data) {
+        if (!Array.isArray(data.expenses)) {
+          triggerHaptic('error');
+          return { success: false, message: "Expenses formati noto'g'ri (massiv bo'lishi kerak)." };
+        }
+        for (const e of data.expenses) {
+          if (!e || typeof e !== 'object' || typeof e.id !== 'string' || typeof e.amount !== 'number' || !Number.isFinite(e.amount)) {
+            triggerHaptic('error');
+            return { success: false, message: "Expenses ichida yaroqsiz xarajat topildi." };
+          }
+        }
+        candidateExpenses = data.expenses;
+      }
+
+      // 5. Activities validation
+      const effectiveHabits = candidateHabits || domainState.habits;
+      const effectiveTasks = candidateTasks || tasks;
+      let candidateActivities: Activity[] | undefined;
+
+      if ('activities' in data) {
+        if (!Array.isArray(data.activities)) {
+          triggerHaptic('error');
+          return { success: false, message: "Activities formati noto'g'ri (massiv bo'lishi kerak)." };
+        }
+
+        const seenIds = new Set<string>();
+        for (const act of data.activities) {
+          if (!act || typeof act !== 'object' || typeof act.id !== 'string' || !act.id.trim()) {
+            triggerHaptic('error');
+            return { success: false, message: "Faoliyat ID'si yaroqsiz yoki mavjud emas." };
+          }
+          if (seenIds.has(act.id)) {
+            triggerHaptic('error');
+            return { success: false, message: `Takroriy faoliyat ID'si aniqlandi: "${act.id}"` };
+          }
+          seenIds.add(act.id);
+
+          const val = validateActivity(act, activeTodayStr, { habits: effectiveHabits, tasks: effectiveTasks });
+          if (!val.isValid) {
+            triggerHaptic('error');
+            return { success: false, message: `Faoliyat validatsiyadan o'tmadi: ${val.error}` };
+          }
+        }
+        candidateActivities = data.activities;
+      } else {
+        // Activities kaliti yo'q eski backup mavjud faoliyatlarni saqlab qolsin
+        candidateActivities = domainState.activities;
+      }
+
+      // ONLY WHEN ALL VALIDATIONS PASS, APPLY STATE CHANGES ATOMICALLY:
+      if (candidateTasks) {
+        setTasks(candidateTasks);
+      }
+      if (candidateExpenses) {
+        setExpenses(candidateExpenses);
+      }
+
+      domainDispatch({
+        type: 'RESET_DOMAIN',
+        activities: candidateActivities,
+        habits: candidateHabits || domainState.habits,
+        goals: candidateGoals || domainState.goals,
+      });
 
       if (data.settings && typeof data.settings === 'object') {
         setSettings(prev => ({ ...prev, ...data.settings }));
       }
+
+      const loadedCount =
+        (candidateTasks?.length || 0) +
+        (candidateHabits?.length || 0) +
+        (candidateGoals?.length || 0) +
+        (candidateExpenses?.length || 0) +
+        (candidateActivities?.length || 0);
+
       triggerHaptic('success');
       return {
         success: true,
@@ -1007,7 +1090,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             id: generateEntityId('confirm'),
             label: '✅ Maqsadni Saqlash',
             action: 'confirm_create',
-            payload: parsed,
+            payload: { ...parsed, operationId: generateEntityId('op-goal') },
+            variant: 'primary',
+          },
+          {
+            id: generateEntityId('cancel'),
+            label: '❌ Bekor qilish',
+            action: 'cancel_prompt',
+            variant: 'danger',
+          }
+        );
+      } else if (parsed.category === 'faoliyat') {
+        const durText = parsed.durationMinutes ? `\n⏱ **Davomiyligi:** ${parsed.durationMinutes} daqiqa` : '';
+        const qtyText = parsed.quantity && parsed.unit ? `\n🔢 **Miqdor:** ${parsed.quantity} ${parsed.unit}` : '';
+        const catLabel = parsed.activityCategory ? `\n🏷 **Toifa:** ${parsed.activityCategory}` : '';
+        responseText = `🏃 **Bajarilgan faoliyat aniqlandi:**\n\n📌 **Nomi:** ${parsed.title}\n📅 **Sana:** ${formatUzbekDateLabel(parsed.date || activeTodayStr, parsed.time)}${durText}${qtyText}${catLabel}`;
+
+        const opId = generateEntityId('op-act');
+        actions.push(
+          {
+            id: generateEntityId('confirm'),
+            label: '✅ Faoliyatni Saqlash',
+            action: 'confirm_create',
+            payload: { ...parsed, operationId: opId },
             variant: 'primary',
           },
           {
@@ -1814,18 +1919,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const resetToDemoData = () => {
     setTasks(defaultTasks);
-    domainDispatch({ type: 'RESET_DOMAIN', habits: defaultHabits, goals: defaultGoals });
+    domainDispatch({ type: 'RESET_DOMAIN', activities: [], habits: defaultHabits, goals: defaultGoals });
     setExpenses(defaultExpenses);
-    setActivities([]);
     setMessages(defaultMessages);
     setSettings(defaultSettings);
   };
 
   const clearAllData = () => {
     setTasks([]);
-    domainDispatch({ type: 'RESET_DOMAIN', habits: [], goals: [] });
+    domainDispatch({ type: 'RESET_DOMAIN', activities: [], habits: [], goals: [] });
     setExpenses([]);
-    setActivities([]);
     setMessages([]);
     try {
       localStorage.removeItem(STORAGE_KEY_TASKS);
