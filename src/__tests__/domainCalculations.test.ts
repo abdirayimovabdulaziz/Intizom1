@@ -2227,7 +2227,14 @@ const dummyContext: BackupValidationContext = {
       hasQuantity: false,
       streak: 3,
       bestStreak: 5,
-      history: {},
+      history: {
+        '2026-10-30': {
+          completed: true,
+          activityContributions: {
+            'act-1': { timestamp: '2026-10-30T07:00:00Z' },
+          },
+        },
+      },
     },
   ],
   currentGoals: [
@@ -2523,6 +2530,475 @@ const dummyContext: BackupValidationContext = {
   assert(dummyContext.currentTasks.length === 1, 'ae5) Kontekstdagi vazifalar o\'zgarmay qoldi');
   assert(dummyContext.currentHabits.length === 1, 'ae5) Kontekstdagi odatlar o\'zgarmay qoldi');
   assert(dummyContext.currentGoals.length === 1, 'ae5) Kontekstdagi maqsadlar o\'zgarmay qoldi');
+}
+
+// ============================================================================
+// TEST SUITE AF: Ikki yo'nalishli activityContributions va Settings tekshiruvlari
+// ============================================================================
+
+// af1) mavjud activity ID, ammo noto'g'ri odat
+{
+  const backup = {
+    tasks: [],
+    habits: [
+      {
+        id: 'habit-A',
+        title: 'Odat A',
+        category: 'odat',
+        frequency: 'daily',
+        daysOfWeek: [1, 2, 3, 4, 5, 6, 7],
+        hasQuantity: true,
+        unit: 'km',
+        streak: 1,
+        bestStreak: 1,
+        history: {
+          '2026-10-30': {
+            completed: true,
+            quantity: 5,
+            activityContributions: {
+              'act-1': { quantity: 5, timestamp: '2026-10-30T10:00:00Z' },
+            },
+          },
+        },
+      },
+      {
+        id: 'habit-B',
+        title: 'Odat B',
+        category: 'odat',
+        frequency: 'daily',
+        daysOfWeek: [1, 2, 3, 4, 5, 6, 7],
+        hasQuantity: true,
+        unit: 'km',
+        streak: 0,
+        bestStreak: 0,
+        history: {},
+      },
+    ],
+    goals: [],
+    expenses: [],
+    activities: [
+      {
+        id: 'act-1',
+        title: 'Yugurish',
+        localDate: '2026-10-30',
+        category: 'sport',
+        quantity: 5,
+        unit: 'km',
+        linkedHabitId: 'habit-B', // Faoliyat Habit B ga bog'langan, ammo Habit A tarixiga yozilgan
+        source: 'manual',
+        createdAt: '2026-10-30T10:00:00Z',
+      },
+    ],
+  };
+
+  const res = parseAndValidateBackup(JSON.stringify(backup), dummyContext);
+  assert(!res.isValid, 'af1) mavjud activity ID, ammo noto\'g\'ri odat rad etiladi');
+}
+
+// af2) noto'g'ri sana
+{
+  const backup = {
+    tasks: [],
+    habits: [
+      {
+        id: 'habit-date-test',
+        title: 'Yugurish',
+        category: 'odat',
+        frequency: 'daily',
+        daysOfWeek: [1, 2, 3, 4, 5, 6, 7],
+        hasQuantity: true,
+        unit: 'km',
+        streak: 1,
+        bestStreak: 1,
+        history: {
+          '2026-10-29': { // Tarix sanasi 2026-10-29
+            completed: true,
+            quantity: 5,
+            activityContributions: {
+              'act-date-1': { quantity: 5, timestamp: '2026-10-30T10:00:00Z' },
+            },
+          },
+        },
+      },
+    ],
+    goals: [],
+    expenses: [],
+    activities: [
+      {
+        id: 'act-date-1',
+        title: 'Yugurish',
+        localDate: '2026-10-30', // Faoliyat sanasi 2026-10-30 (tarix sanasiga mos emas)
+        category: 'sport',
+        quantity: 5,
+        unit: 'km',
+        linkedHabitId: 'habit-date-test',
+        source: 'manual',
+        createdAt: '2026-10-30T10:00:00Z',
+      },
+    ],
+  };
+
+  const res = parseAndValidateBackup(JSON.stringify(backup), dummyContext);
+  assert(!res.isValid, 'af2) noto\'g\'ri sana (activity.localDate !== history date) rad etiladi');
+}
+
+// af3) noto'g'ri hissa miqdori
+{
+  const backup = {
+    tasks: [],
+    habits: [
+      {
+        id: 'habit-qty-test',
+        title: 'Kitob',
+        category: 'odat',
+        frequency: 'daily',
+        daysOfWeek: [1, 2, 3, 4, 5, 6, 7],
+        hasQuantity: true,
+        unit: 'bet',
+        streak: 1,
+        bestStreak: 1,
+        history: {
+          '2026-10-30': {
+            completed: true,
+            quantity: 20,
+            activityContributions: {
+              'act-qty-1': { quantity: 20, timestamp: '2026-10-30T10:00:00Z' }, // Hissa miqdori 20
+            },
+          },
+        },
+      },
+    ],
+    goals: [],
+    expenses: [],
+    activities: [
+      {
+        id: 'act-qty-1',
+        title: 'Kitob o\'qish',
+        localDate: '2026-10-30',
+        category: 'talim',
+        quantity: 30, // Faoliyat miqdori 30 (mos emas!)
+        unit: 'bet',
+        linkedHabitId: 'habit-qty-test',
+        source: 'manual',
+        createdAt: '2026-10-30T10:00:00Z',
+      },
+    ],
+  };
+
+  const res = parseAndValidateBackup(JSON.stringify(backup), dummyContext);
+  assert(!res.isValid, 'af3) noto\'g\'ri hissa miqdori (contrib.quantity !== act.quantity) rad etiladi');
+}
+
+// af4) activity bor, hissa yo'q (reverse check)
+{
+  const backup = {
+    tasks: [],
+    habits: [
+      {
+        id: 'habit-rev-test',
+        title: 'Suzish',
+        category: 'odat',
+        frequency: 'daily',
+        daysOfWeek: [1, 2, 3, 4, 5, 6, 7],
+        hasQuantity: false,
+        streak: 0,
+        bestStreak: 0,
+        history: {}, // Odat tarixida faoliyat hissasi yo'q!
+      },
+    ],
+    goals: [],
+    expenses: [],
+    activities: [
+      {
+        id: 'act-rev-1',
+        title: 'Suzish mashqi',
+        localDate: '2026-10-30',
+        category: 'sport',
+        linkedHabitId: 'habit-rev-test',
+        source: 'manual',
+        createdAt: '2026-10-30T10:00:00Z',
+      },
+    ],
+  };
+
+  const res = parseAndValidateBackup(JSON.stringify(backup), dummyContext);
+  assert(!res.isValid, 'af4) activity bor, ammo tegishli hissa yo\'q holati rad etiladi');
+}
+
+// af5) hissa bor, activity yo'q
+{
+  const backup = {
+    tasks: [],
+    habits: [
+      {
+        id: 'habit-ghost-test',
+        title: 'Yugurish',
+        category: 'odat',
+        frequency: 'daily',
+        daysOfWeek: [1, 2, 3, 4, 5, 6, 7],
+        hasQuantity: true,
+        unit: 'km',
+        streak: 1,
+        bestStreak: 1,
+        history: {
+          '2026-10-30': {
+            completed: true,
+            quantity: 5,
+            activityContributions: {
+              'act-ghost-999': { quantity: 5, timestamp: '2026-10-30T10:00:00Z' }, // activities ro'yxatida yo'q!
+            },
+          },
+        },
+      },
+    ],
+    goals: [],
+    expenses: [],
+    activities: [], // Bo'sh faoliyatlar
+  };
+
+  const res = parseAndValidateBackup(JSON.stringify(backup), dummyContext);
+  assert(!res.isValid, 'af5) hissa bor, ammo activity yo\'q (arvoh hissa) rad etiladi');
+}
+
+// af6) hisoblangan jami quantity bilan history.quantity farqi
+{
+  const backup = {
+    tasks: [],
+    habits: [
+      {
+        id: 'habit-sync-test',
+        title: 'Kitob',
+        category: 'odat',
+        frequency: 'daily',
+        daysOfWeek: [1, 2, 3, 4, 5, 6, 7],
+        hasQuantity: true,
+        unit: 'bet',
+        streak: 1,
+        bestStreak: 1,
+        history: {
+          '2026-10-30': {
+            completed: true,
+            quantity: 50, // Buzilgan qiymat: hissa 20, manual 0 bo'lsa-da 50 yozilgan!
+            activityContributions: {
+              'act-sync-1': { quantity: 20, timestamp: '2026-10-30T10:00:00Z' },
+            },
+          },
+        },
+      },
+    ],
+    goals: [],
+    expenses: [],
+    activities: [
+      {
+        id: 'act-sync-1',
+        title: 'Kitob',
+        localDate: '2026-10-30',
+        category: 'talim',
+        quantity: 20,
+        unit: 'bet',
+        linkedHabitId: 'habit-sync-test',
+        source: 'manual',
+        createdAt: '2026-10-30T10:00:00Z',
+      },
+    ],
+  };
+
+  const res = parseAndValidateBackup(JSON.stringify(backup), dummyContext);
+  assert(!res.isValid, 'af6) hisoblangan jami quantity bilan history.quantity farqi rad etiladi');
+}
+
+// af7) timezone: 123, aiEnabled: "false", morningTime: "25:90"
+{
+  // a) timezone son bo'lsa
+  const rTzNum = parseAndValidateBackup(
+    JSON.stringify({
+      settings: {
+        name: 'Ali',
+        username: 'ali',
+        timezone: 123,
+        morningTime: '08:00',
+        eveningTime: '21:00',
+        reminderSound: true,
+        aiEnabled: true,
+      },
+    }),
+    dummyContext
+  );
+  assert(!rTzNum.isValid, 'af7a) timezone: 123 rad etiladi');
+
+  // b) aiEnabled string bo'lsa ("false")
+  const rAiStr = parseAndValidateBackup(
+    JSON.stringify({
+      settings: {
+        name: 'Ali',
+        username: 'ali',
+        timezone: 'Asia/Tashkent',
+        morningTime: '08:00',
+        eveningTime: '21:00',
+        reminderSound: true,
+        aiEnabled: 'false', // string emas, boolean bo'lishi shart
+      },
+    }),
+    dummyContext
+  );
+  assert(!rAiStr.isValid, 'af7b) aiEnabled: "false" rad etiladi');
+
+  // c) morningTime noto'g'ri bo'lsa ("25:90")
+  const rTimeBad = parseAndValidateBackup(
+    JSON.stringify({
+      settings: {
+        name: 'Ali',
+        username: 'ali',
+        timezone: 'Asia/Tashkent',
+        morningTime: '25:90',
+        eveningTime: '21:00',
+        reminderSound: true,
+        aiEnabled: true,
+      },
+    }),
+    dummyContext
+  );
+  assert(!rTimeBad.isValid, 'af7c) morningTime: "25:90" rad etiladi');
+
+  // d) Noma'lum maydonlar filtrlanadi, rogue parametrlar qolmaydi
+  const rSanitize = parseAndValidateBackup(
+    JSON.stringify({
+      settings: {
+        name: 'Ali',
+        username: 'ali',
+        timezone: 'Asia/Tashkent',
+        morningTime: '08:00',
+        eveningTime: '21:00',
+        reminderSound: true,
+        aiEnabled: true,
+        monthlyExpenseBudget: 1000000,
+        maliciousField: 'hack_attempt',
+      },
+    }),
+    dummyContext
+  );
+  assert(rSanitize.isValid, 'af7d) To\'g\'ri settings validatsiyadan o\'tadi');
+  if (rSanitize.isValid) {
+    assert(
+      (rSanitize.candidateData.settings as any).maliciousField === undefined,
+      'af7d) Noma\'lum maydonlar (maliciousField) sanitizatsiya qilinib filtrlanadi'
+    );
+  }
+}
+
+// af8) haqiqiy export/import round-trip
+{
+  const realBackup = {
+    appName: 'Kunlik Yordamchi',
+    exportDate: '2026-10-30T18:00:00Z',
+    tasks: [
+      {
+        id: 't-real-1',
+        title: 'Mijoz bilan uchrashuv',
+        category: 'uchrashuv',
+        date: '2026-10-30',
+        time: '14:00',
+        status: 'pending',
+        priority: 'high',
+        source: 'bot',
+      },
+    ],
+    habits: [
+      {
+        id: 'h-real-1',
+        title: 'Yugurish',
+        category: 'odat',
+        frequency: 'daily',
+        daysOfWeek: [1, 2, 3, 4, 5, 6, 7],
+        hasQuantity: true,
+        targetQuantity: 5,
+        unit: 'km',
+        streak: 4,
+        bestStreak: 10,
+        linkedGoalId: 'g-real-1',
+        history: {
+          '2026-10-30': {
+            completed: true,
+            quantity: 5,
+            manualCompleted: false,
+            manualQuantity: 0,
+            activityContributions: {
+              'act-real-1': { quantity: 5, timestamp: '2026-10-30T07:00:00Z' },
+            },
+          },
+        },
+      },
+    ],
+    goals: [
+      {
+        id: 'g-real-1',
+        title: 'Yarim marafon',
+        category: 'maqsad',
+        deadline: '2026-12-31',
+        targetValue: 21,
+        currentValue: 5,
+        unit: 'km',
+        linkedHabitIds: ['h-real-1'],
+        status: 'active',
+      },
+    ],
+    expenses: [
+      {
+        id: 'e-real-1',
+        title: 'Sport krossovkasi',
+        amount: 450000,
+        currency: 'UZS',
+        category: 'sport',
+        date: '2026-10-30',
+        source: 'miniapp',
+      },
+    ],
+    activities: [
+      {
+        id: 'act-real-1',
+        title: 'Tonggi yugurish',
+        localDate: '2026-10-30',
+        time: '07:00',
+        category: 'sport',
+        durationMinutes: 30,
+        quantity: 5,
+        unit: 'km',
+        linkedHabitId: 'h-real-1',
+        source: 'manual',
+        createdAt: '2026-10-30T07:00:00Z',
+      },
+    ],
+    settings: {
+      name: 'Aziz',
+      username: 'azizbek',
+      timezone: 'Asia/Tashkent (UZT)',
+      morningTime: '06:30',
+      eveningTime: '22:30',
+      reminderSound: true,
+      aiEnabled: true,
+      monthlyExpenseBudget: 3000000,
+    },
+  };
+
+  const json1 = JSON.stringify(realBackup);
+  const res = parseAndValidateBackup(json1, dummyContext);
+
+  assert(res.isValid, 'af8) Haqiqiy export validatsiyadan muvaffaqiyatli o\'tadi');
+  if (res.isValid) {
+    const candidate = res.candidateData;
+    const reExport = {
+      appName: 'Kunlik Yordamchi',
+      exportDate: realBackup.exportDate,
+      tasks: candidate.tasks,
+      habits: candidate.habits,
+      goals: candidate.goals,
+      expenses: candidate.expenses,
+      activities: candidate.activities,
+      settings: candidate.settings,
+    };
+    const json2 = JSON.stringify(reExport);
+    assert(json1 === json2, 'af8) Haqiqiy export/import round-trip to\'liq tenglikni saqlaydi');
+  }
 }
 
 console.log(`\n========================================`);
