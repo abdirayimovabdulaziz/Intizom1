@@ -1,4 +1,17 @@
-import { Habit, Goal, Task, HabitFrequency, Activity, ActivityCategory, ACTIVITY_CATEGORIES, HabitDayRecord } from '../types';
+import {
+  Habit,
+  Goal,
+  Task,
+  Expense,
+  UserSettings,
+  HabitFrequency,
+  Activity,
+  ActivityCategory,
+  ACTIVITY_CATEGORIES,
+  EXPENSE_CATEGORIES,
+  ExpenseCategory,
+  HabitDayRecord,
+} from '../types';
 
 /**
  * Normalizes timezone string to a valid IANA timezone identifier
@@ -666,6 +679,12 @@ export function applyActivityContributionToHabit(
   const updatedRecord = syncHabitDayRecord(
     {
       ...currentRecord,
+      manualQuantity:
+        currentRecord?.manualQuantity ??
+        (!currentRecord?.activityContributions ? (currentRecord?.quantity || 0) : 0),
+      manualCompleted:
+        currentRecord?.manualCompleted ??
+        (!currentRecord?.activityContributions ? !!currentRecord?.completed : false),
       activityContributions: nextContributions,
       timestamp: activity.createdAt,
     },
@@ -739,6 +758,8 @@ export function removeActivityContributionFromHabit(
   const updatedRecord = syncHabitDayRecord(
     {
       ...currentRecord,
+      manualQuantity: currentRecord.manualQuantity ?? 0,
+      manualCompleted: currentRecord.manualCompleted ?? false,
       activityContributions: Object.keys(nextContributions).length > 0 ? nextContributions : undefined,
     },
     habit
@@ -1348,3 +1369,420 @@ export function calculateCalendarPeriodSummary(
     totalEventsCount: totalActivities + standaloneHabitCompletions + standaloneCompletedTasks.length,
   };
 }
+
+export interface BackupValidationContext {
+  todayStr: string;
+  currentTasks: Task[];
+  currentHabits: Habit[];
+  currentGoals: Goal[];
+  currentExpenses: Expense[];
+  currentActivities: Activity[];
+  currentSettings: UserSettings;
+}
+
+export interface CandidateBackupData {
+  tasks: Task[];
+  habits: Habit[];
+  goals: Goal[];
+  expenses: Expense[];
+  activities: Activity[];
+  settings?: Partial<UserSettings>;
+}
+
+export type BackupValidationResult =
+  | {
+      isValid: true;
+      candidateData: CandidateBackupData;
+      loadedCount: number;
+    }
+  | {
+      isValid: false;
+      error: string;
+    };
+
+/**
+ * Pure candidate-state import validator.
+ * Validates all collections, foreign keys, internal history structures,
+ * non-duplicate IDs, and activity contributions.
+ * Guarantees all-or-nothing candidate readiness before any state mutation.
+ */
+export function parseAndValidateBackup(
+  jsonStr: string,
+  context: BackupValidationContext
+): BackupValidationResult {
+  if (typeof jsonStr !== 'string' || !jsonStr.trim()) {
+    return { isValid: false, error: "Zaxira nusxasi matni bo'sh bo'lishi mumkin emas." };
+  }
+
+  let data: any;
+  try {
+    data = JSON.parse(jsonStr);
+  } catch {
+    return { isValid: false, error: "JSON fayli formati noto'g'ri yoki buzilgan." };
+  }
+
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    return { isValid: false, error: "Zaxira nusxasi ob'ekt (JSON object) formatida bo'lishi kerak." };
+  }
+
+  // 1. Candidate Tasks
+  let candidateTasks: Task[] = context.currentTasks;
+  if ('tasks' in data) {
+    if (!Array.isArray(data.tasks)) {
+      return { isValid: false, error: "Tasks maydoni massiv (array) bo'lishi kerak." };
+    }
+    const seenTaskIds = new Set<string>();
+    for (const t of data.tasks) {
+      if (!t || typeof t !== 'object') {
+        return { isValid: false, error: "Vazifalar ichida yaroqsiz yozuv topildi." };
+      }
+      if (typeof t.id !== 'string' || !t.id.trim()) {
+        return { isValid: false, error: "Vazifaning ID'si kiritilmagan yoki bo'sh." };
+      }
+      if (seenTaskIds.has(t.id)) {
+        return { isValid: false, error: `Takroriy vazifa ID'si aniqlandi: "${t.id}"` };
+      }
+      seenTaskIds.add(t.id);
+
+      if (typeof t.title !== 'string' || !t.title.trim()) {
+        return { isValid: false, error: `Vazifaning sarlavhasi (title) bo'sh: "${t.id}"` };
+      }
+      if (typeof t.date !== 'string' || !isValidYMD(t.date)) {
+        return { isValid: false, error: `Vazifa sanasi noto'g'ri formatda (YYYY-MM-DD kutilgan): "${t.date}"` };
+      }
+      if (t.time !== undefined && t.time !== null && t.time !== '') {
+        if (!validateTimeHHMM(t.time)) {
+          return { isValid: false, error: `Vazifa vaqti noto'g'ri formatda (HH:mm kutilgan): "${t.time}"` };
+        }
+      }
+      const validTaskStatuses = ['pending', 'completed', 'postponed', 'cancelled'];
+      if (t.status && !validTaskStatuses.includes(t.status)) {
+        return { isValid: false, error: `Vazifaning statusi yaroqsiz: "${t.status}"` };
+      }
+      if (t.priority && !['low', 'medium', 'high'].includes(t.priority)) {
+        return { isValid: false, error: `Vazifaning ustuvorligi (priority) yaroqsiz: "${t.priority}"` };
+      }
+      if (t.category && !['vazifa', 'uchrashuv'].includes(t.category)) {
+        return { isValid: false, error: `Vazifaning toifasi (category) yaroqsiz: "${t.category}"` };
+      }
+    }
+    candidateTasks = data.tasks;
+  }
+
+  // 2. Candidate Habits
+  let candidateHabits: Habit[] = context.currentHabits;
+  if ('habits' in data) {
+    if (!Array.isArray(data.habits)) {
+      return { isValid: false, error: "Habits maydoni massiv (array) bo'lishi kerak." };
+    }
+    const seenHabitIds = new Set<string>();
+    for (const h of data.habits) {
+      if (!h || typeof h !== 'object') {
+        return { isValid: false, error: "Odatlar ichida yaroqsiz yozuv topildi." };
+      }
+      if (typeof h.id !== 'string' || !h.id.trim()) {
+        return { isValid: false, error: "Odatning ID'si kiritilmagan yoki bo'sh." };
+      }
+      if (seenHabitIds.has(h.id)) {
+        return { isValid: false, error: `Takroriy odat ID'si aniqlandi: "${h.id}"` };
+      }
+      seenHabitIds.add(h.id);
+
+      if (typeof h.title !== 'string' || !h.title.trim()) {
+        return { isValid: false, error: `Odatning sarlavhasi (title) bo'sh: "${h.id}"` };
+      }
+      if (!['daily', 'weekly_target', 'specific_days'].includes(h.frequency)) {
+        return { isValid: false, error: `Odat takrorlanish formati (frequency) yaroqsiz: "${h.frequency}"` };
+      }
+      if (h.frequency === 'specific_days') {
+        if (!Array.isArray(h.daysOfWeek) || h.daysOfWeek.length === 0) {
+          return { isValid: false, error: `Tanlangan kunlar (daysOfWeek) bo'sh bo'lishi mumkin emas: "${h.title}"` };
+        }
+        for (const d of h.daysOfWeek) {
+          if (!Number.isInteger(d) || d < 1 || d > 7) {
+            return { isValid: false, error: `Tanlangan kunlar (1..7 diapazonida butun son) yaroqsiz: ${d}` };
+          }
+        }
+      }
+      if (h.frequency === 'weekly_target') {
+        if (typeof h.targetDaysPerWeek !== 'number' || !Number.isInteger(h.targetDaysPerWeek) || h.targetDaysPerWeek < 1 || h.targetDaysPerWeek > 7) {
+          return { isValid: false, error: `Haftalik maqsad (targetDaysPerWeek) 1..7 orasida bo'lishi kerak: "${h.title}"` };
+        }
+      }
+      if (h.streak !== undefined && (typeof h.streak !== 'number' || !Number.isFinite(h.streak) || h.streak < 0)) {
+        return { isValid: false, error: `Odat streak qiymati yaroqsiz: "${h.title}"` };
+      }
+      if (h.bestStreak !== undefined && (typeof h.bestStreak !== 'number' || !Number.isFinite(h.bestStreak) || h.bestStreak < 0)) {
+        return { isValid: false, error: `Odat bestStreak qiymati yaroqsiz: "${h.title}"` };
+      }
+      if (h.targetQuantity !== undefined && h.targetQuantity !== null) {
+        if (typeof h.targetQuantity !== 'number' || !Number.isFinite(h.targetQuantity) || h.targetQuantity <= 0) {
+          return { isValid: false, error: `Odat targetQuantity musbat chekli son bo'lishi kerak: "${h.title}"` };
+        }
+      }
+
+      // Internal history structure validation
+      if (h.history !== undefined && h.history !== null) {
+        if (typeof h.history !== 'object' || Array.isArray(h.history)) {
+          return { isValid: false, error: `Odat tarixi (history) ob'ekt bo'lishi kerak: "${h.title}"` };
+        }
+        for (const [dateKey, record] of Object.entries(h.history)) {
+          if (!isValidYMD(dateKey)) {
+            return { isValid: false, error: `Odat tarixidagi sana kaliti yaroqsiz (YYYY-MM-DD kutilgan): "${dateKey}"` };
+          }
+          if (!record || typeof record !== 'object') {
+            return { isValid: false, error: `Odat tarixi yozuvi yaroqsiz: "${h.title}" -> "${dateKey}"` };
+          }
+          if (typeof (record as HabitDayRecord).completed !== 'boolean') {
+            return { isValid: false, error: `Odat tarixi "completed" qiymati boolean bo'lishi shart: "${h.title}" -> "${dateKey}"` };
+          }
+          const qty = (record as HabitDayRecord).quantity;
+          if (qty !== undefined && (typeof qty !== 'number' || !Number.isFinite(qty) || qty < 0)) {
+            return { isValid: false, error: `Odat tarixi quantity qiymati manfiy bo'lmasligi kerak: "${h.title}" -> "${dateKey}"` };
+          }
+          const contribs = (record as HabitDayRecord).activityContributions;
+          if (contribs !== undefined && contribs !== null) {
+            if (typeof contribs !== 'object' || Array.isArray(contribs)) {
+              return { isValid: false, error: `Odat tarixi activityContributions ob'ekt bo'lishi kerak: "${h.title}" -> "${dateKey}"` };
+            }
+            for (const [actKey, cVal] of Object.entries(contribs)) {
+              if (!actKey || typeof actKey !== 'string') {
+                return { isValid: false, error: `Faoliyat hissasining kaliti yaroqsiz: "${h.title}"` };
+              }
+              if (!cVal || typeof cVal !== 'object') {
+                return { isValid: false, error: `Faoliyat hissasi qiymati ob'ekt bo'lishi kerak: "${h.title}" -> "${actKey}"` };
+              }
+              if (cVal.quantity !== undefined && (typeof cVal.quantity !== 'number' || !Number.isFinite(cVal.quantity) || cVal.quantity <= 0)) {
+                return { isValid: false, error: `Faoliyat hissasi miqdori (quantity) musbat chekli son bo'lishi kerak: "${actKey}"` };
+              }
+            }
+          }
+        }
+      }
+    }
+    candidateHabits = data.habits;
+  }
+
+  // 3. Candidate Goals
+  let candidateGoals: Goal[] = context.currentGoals;
+  if ('goals' in data) {
+    if (!Array.isArray(data.goals)) {
+      return { isValid: false, error: "Goals maydoni massiv (array) bo'lishi kerak." };
+    }
+    const seenGoalIds = new Set<string>();
+    for (const g of data.goals) {
+      if (!g || typeof g !== 'object') {
+        return { isValid: false, error: "Maqsadlar ichida yaroqsiz yozuv topildi." };
+      }
+      if (typeof g.id !== 'string' || !g.id.trim()) {
+        return { isValid: false, error: "Maqsadning ID'si kiritilmagan yoki bo'sh." };
+      }
+      if (seenGoalIds.has(g.id)) {
+        return { isValid: false, error: `Takroriy maqsad ID'si aniqlandi: "${g.id}"` };
+      }
+      seenGoalIds.add(g.id);
+
+      if (typeof g.title !== 'string' || !g.title.trim()) {
+        return { isValid: false, error: `Maqsadning sarlavhasi (title) bo'sh: "${g.id}"` };
+      }
+      if (typeof g.targetValue !== 'number' || !Number.isFinite(g.targetValue) || g.targetValue <= 0) {
+        return { isValid: false, error: `Maqsad targetValue musbat chekli son bo'lishi shart: "${g.title}"` };
+      }
+      if (typeof g.currentValue !== 'number' || !Number.isFinite(g.currentValue) || g.currentValue < 0) {
+        return { isValid: false, error: `Maqsad currentValue manfiy bo'lmagan chekli son bo'lishi shart: "${g.title}"` };
+      }
+      if (typeof g.unit !== 'string' || !g.unit.trim()) {
+        return { isValid: false, error: `Maqsad birligi (unit) kiritilishi shart: "${g.title}"` };
+      }
+      if (!['active', 'achieved', 'paused'].includes(g.status)) {
+        return { isValid: false, error: `Maqsad statusi yaroqsiz: "${g.status}"` };
+      }
+      if (g.goalType && !['reach', 'decrease'].includes(g.goalType)) {
+        return { isValid: false, error: `Maqsad turi (goalType) yaroqsiz: "${g.goalType}"` };
+      }
+      if (typeof g.deadline !== 'string' || !isValidYMD(g.deadline)) {
+        return { isValid: false, error: `Maqsad muddati (deadline) noto'g'ri (YYYY-MM-DD kutilgan): "${g.deadline}"` };
+      }
+      if (g.progressLogs !== undefined && !Array.isArray(g.progressLogs)) {
+        return { isValid: false, error: `Maqsad progressLogs maydoni massiv bo'lishi kerak: "${g.title}"` };
+      }
+      if (g.internalHabits !== undefined && !Array.isArray(g.internalHabits)) {
+        return { isValid: false, error: `Maqsad internalHabits maydoni massiv bo'lishi kerak: "${g.title}"` };
+      }
+    }
+    candidateGoals = data.goals;
+  }
+
+  // 4. Candidate Expenses
+  let candidateExpenses: Expense[] = context.currentExpenses;
+  if ('expenses' in data) {
+    if (!Array.isArray(data.expenses)) {
+      return { isValid: false, error: "Expenses maydoni massiv (array) bo'lishi kerak." };
+    }
+    const seenExpIds = new Set<string>();
+    for (const e of data.expenses) {
+      if (!e || typeof e !== 'object') {
+        return { isValid: false, error: "Xarajatlar ichida yaroqsiz yozuv topildi." };
+      }
+      if (typeof e.id !== 'string' || !e.id.trim()) {
+        return { isValid: false, error: "Xarajatning ID'si kiritilmagan yoki bo'sh." };
+      }
+      if (seenExpIds.has(e.id)) {
+        return { isValid: false, error: `Takroriy xarajat ID'si aniqlandi: "${e.id}"` };
+      }
+      seenExpIds.add(e.id);
+
+      if (typeof e.title !== 'string' || !e.title.trim()) {
+        return { isValid: false, error: `Xarajat sarlavhasi (title) bo'sh: "${e.id}"` };
+      }
+      if (typeof e.amount !== 'number' || !Number.isFinite(e.amount) || e.amount <= 0) {
+        return { isValid: false, error: `Xarajat summasi (amount) musbat chekli son bo'lishi shart: "${e.title}"` };
+      }
+      if (typeof e.date !== 'string' || !isValidYMD(e.date)) {
+        return { isValid: false, error: `Xarajat sanasi noto'g'ri (YYYY-MM-DD kutilgan): "${e.date}"` };
+      }
+      if (e.currency && !['UZS', 'USD'].includes(e.currency)) {
+        return { isValid: false, error: `Xarajat valyutasi yaroqsiz: "${e.currency}"` };
+      }
+      if (!EXPENSE_CATEGORIES.includes(e.category)) {
+        return { isValid: false, error: `Xarajat toifasi yaroqsiz: "${e.category}"` };
+      }
+    }
+    candidateExpenses = data.expenses;
+  }
+
+  // 5. Candidate Activities
+  let candidateActivities: Activity[] = [];
+  if ('activities' in data) {
+    if (!Array.isArray(data.activities)) {
+      return { isValid: false, error: "Activities maydoni massiv (array) bo'lishi kerak." };
+    }
+    const seenActIds = new Set<string>();
+    for (const act of data.activities) {
+      if (!act || typeof act !== 'object') {
+        return { isValid: false, error: "Faoliyatlar ichida yaroqsiz yozuv topildi." };
+      }
+      if (typeof act.id !== 'string' || !act.id.trim()) {
+        return { isValid: false, error: "Faoliyat ID'si kiritilmagan yoki bo'sh." };
+      }
+      if (seenActIds.has(act.id)) {
+        return { isValid: false, error: `Takroriy faoliyat ID'si aniqlandi: "${act.id}"` };
+      }
+      seenActIds.add(act.id);
+
+      const val = validateActivity(act, context.todayStr, {
+        habits: candidateHabits,
+        tasks: candidateTasks,
+      });
+      if (!val.isValid) {
+        return { isValid: false, error: `Faoliyat validatsiyadan o'tmadi: ${val.error}` };
+      }
+    }
+    candidateActivities = data.activities;
+  } else {
+    // Legacy backup without 'activities' key: keep existing activities,
+    // but strictly verify their foreign keys against candidate habits and tasks!
+    candidateActivities = context.currentActivities;
+    for (const act of candidateActivities) {
+      if (act.linkedHabitId) {
+        const habitExists = candidateHabits.some(h => h.id === act.linkedHabitId);
+        if (!habitExists) {
+          return {
+            isValid: false,
+            error: `Eski zaxira nusxasini tiklab bo'lmadi: mavjud faoliyat bog'langan odat ("${act.linkedHabitId}") zaxira nusxasida mavjud emas.`,
+          };
+        }
+      }
+      if (act.linkedTaskId) {
+        const taskExists = candidateTasks.some(t => t.id === act.linkedTaskId);
+        if (!taskExists) {
+          return {
+            isValid: false,
+            error: `Eski zaxira nusxasini tiklab bo'lmadi: mavjud faoliyat bog'langan vazifa ("${act.linkedTaskId}") zaxira nusxasida mavjud emas.`,
+          };
+        }
+      }
+    }
+  }
+
+  // 6. Cross-Entity Foreign Key Integrity against the final candidate state
+  const candidateActIdSet = new Set(candidateActivities.map(a => a.id));
+
+  // A. Habit -> Goal linkage and activityContributions integrity
+  for (const h of candidateHabits) {
+    if (h.linkedGoalId) {
+      const goalExists = candidateGoals.some(g => g.id === h.linkedGoalId);
+      if (!goalExists) {
+        return {
+          isValid: false,
+          error: `Odat ("${h.title}") bog'langan maqsad ID'si ("${h.linkedGoalId}") maqsadlar ro'yxatida topilmadi.`,
+        };
+      }
+    }
+
+    if (h.history) {
+      for (const [dStr, rec] of Object.entries(h.history)) {
+        if (rec && rec.activityContributions) {
+          for (const actId of Object.keys(rec.activityContributions)) {
+            if (!candidateActIdSet.has(actId)) {
+              return {
+                isValid: false,
+                error: `Odat ("${h.title}") tarixidagi hissa ID'si ("${actId}") faoliyatlar ro'yxatida topilmadi (bog'lanish buzilgan).`,
+              };
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // B. Goal -> Habit linkage
+  for (const g of candidateGoals) {
+    if (Array.isArray(g.linkedHabitIds)) {
+      for (const hid of g.linkedHabitIds) {
+        const habitExists = candidateHabits.some(h => h.id === hid);
+        if (!habitExists) {
+          return {
+            isValid: false,
+            error: `Maqsad ("${g.title}") bog'langan odat ID'si ("${hid}") odatlar ro'yxatida topilmadi.`,
+          };
+        }
+      }
+    }
+  }
+
+  // 7. Settings validation
+  let candidateSettings: Partial<UserSettings> | undefined;
+  if ('settings' in data) {
+    if (!data.settings || typeof data.settings !== 'object' || Array.isArray(data.settings)) {
+      return { isValid: false, error: "Settings maydoni ob'ekt bo'lishi kerak." };
+    }
+    if (data.settings.monthlyExpenseBudget !== undefined && data.settings.monthlyExpenseBudget !== null) {
+      if (typeof data.settings.monthlyExpenseBudget !== 'number' || !Number.isFinite(data.settings.monthlyExpenseBudget) || data.settings.monthlyExpenseBudget < 0) {
+        return { isValid: false, error: "Oylik byudjet (monthlyExpenseBudget) manfiy bo'lmagan son bo'lishi kerak." };
+      }
+    }
+    candidateSettings = data.settings;
+  }
+
+  const loadedCount =
+    candidateTasks.length +
+    candidateHabits.length +
+    candidateGoals.length +
+    candidateExpenses.length +
+    candidateActivities.length;
+
+  return {
+    isValid: true,
+    candidateData: {
+      tasks: candidateTasks,
+      habits: candidateHabits,
+      goals: candidateGoals,
+      expenses: candidateExpenses,
+      activities: candidateActivities,
+      settings: candidateSettings,
+    },
+    loadedCount,
+  };
+}
+

@@ -19,8 +19,10 @@ import {
   getPreviousDayOfWeekYMD,
   getTaskCompletionDateInTimezone,
   validateTimeHHMM,
+  parseAndValidateBackup,
+  BackupValidationContext,
 } from '../utils/domainCalculations';
-import { Habit, Goal, Task, GoalInternalHabit, Activity } from '../types';
+import { Habit, Goal, Task, GoalInternalHabit, Activity, Expense, UserSettings } from '../types';
 import {
   domainReducer,
   DomainState,
@@ -1777,6 +1779,750 @@ console.log('=== KUNLIK YORDAMCHI DOMEN TESTLARI ===\n');
 
   const v3 = validateActivity({ title: 'Test', localDate: '2026-10-30', time: '14:30' }, '2026-10-30');
   assert(v3.isValid, 'ac6) To\'g\'ri vaqt formati (14:30) qabul qilindi');
+}
+
+// ============================================================================
+// TEST SUITE AD: UPDATE_ACTIVITY Maqsadga Net Delta Bir Marta Qo'llanishi
+// ============================================================================
+
+// ad1) Maqsad qiymati 0 chegarasida activity title-only edit
+{
+  const habitA: Habit = {
+    id: 'habit-ad1',
+    title: 'Kitob o\'qish',
+    category: 'odat',
+    frequency: 'daily',
+    daysOfWeek: [1, 2, 3, 4, 5, 6, 7],
+    hasQuantity: true,
+    targetQuantity: 20,
+    unit: 'bet',
+    streak: 5,
+    bestStreak: 10,
+    linkedGoalId: 'goal-ad1',
+    history: {
+      '2026-10-30': {
+        completed: true,
+        quantity: 20,
+        activityContributions: {
+          'act-ad1': { quantity: 20, timestamp: '2026-10-30T10:00:00Z' },
+        },
+      },
+    },
+  };
+
+  const goalA: Goal = {
+    id: 'goal-ad1',
+    title: '300 bet kitob',
+    category: 'maqsad',
+    deadline: '2026-12-31',
+    targetValue: 300,
+    currentValue: 0, // Chegara holati: 0 qiymat
+    unit: 'bet',
+    linkedHabitIds: ['habit-ad1'],
+    status: 'active',
+  };
+
+  const actA: Activity = {
+    id: 'act-ad1',
+    title: 'Eski kitob nomi',
+    localDate: '2026-10-30',
+    category: 'talim',
+    quantity: 20,
+    unit: 'bet',
+    linkedHabitId: 'habit-ad1',
+    source: 'manual',
+    createdAt: '2026-10-30T10:00:00Z',
+  };
+
+  const state: DomainState = {
+    activities: [actA],
+    habits: [habitA],
+    goals: [goalA],
+  };
+
+  // Faqat title va notes o'zgaradi
+  const updatedState = domainReducer(state, {
+    type: 'UPDATE_ACTIVITY',
+    id: 'act-ad1',
+    updates: { title: 'Yangi kitob nomi', notes: 'Qiziqarli bob' },
+    dateStr: '2026-10-30',
+  });
+
+  assert(
+    updatedState.goals[0].currentValue === 0,
+    'ad1) Maqsad qiymati 0 bo\'lganda title edit uni korruptsiya qilmaydi (currentValue 0 saqlanadi)'
+  );
+  assert(
+    updatedState.habits[0].streak === 5 && updatedState.habits[0].bestStreak === 10,
+    'ad1) Odat streak va bestStreak title edit tufayli sun\'iy o\'zgarmaydi'
+  );
+  assert(
+    updatedState.activities[0].title === 'Yangi kitob nomi',
+    'ad1) Faoliyat sarlavhasi yangilandi'
+  );
+}
+
+// ad2) Bir xil activity'ni o'zgarishsiz update qilish
+{
+  const habitA: Habit = {
+    id: 'habit-ad2',
+    title: 'Suv ichish',
+    category: 'odat',
+    frequency: 'daily',
+    daysOfWeek: [1, 2, 3, 4, 5, 6, 7],
+    hasQuantity: true,
+    targetQuantity: 2000,
+    unit: 'ml',
+    streak: 3,
+    bestStreak: 7,
+    linkedGoalId: 'goal-ad2',
+    history: {
+      '2026-10-30': {
+        completed: true,
+        quantity: 500,
+        activityContributions: {
+          'act-ad2': { quantity: 500, timestamp: '2026-10-30T10:00:00Z' },
+        },
+      },
+    },
+  };
+
+  const goalA: Goal = {
+    id: 'goal-ad2',
+    title: 'Kundalik suv',
+    category: 'maqsad',
+    deadline: '2026-12-31',
+    targetValue: 2000,
+    currentValue: 500,
+    unit: 'ml',
+    linkedHabitIds: ['habit-ad2'],
+    status: 'active',
+  };
+
+  const actA: Activity = {
+    id: 'act-ad2',
+    title: 'Suv',
+    localDate: '2026-10-30',
+    category: 'salomatlik',
+    quantity: 500,
+    unit: 'ml',
+    linkedHabitId: 'habit-ad2',
+    source: 'manual',
+    createdAt: '2026-10-30T10:00:00Z',
+  };
+
+  const state: DomainState = {
+    activities: [actA],
+    habits: [habitA],
+    goals: [goalA],
+  };
+
+  const updatedState = domainReducer(state, {
+    type: 'UPDATE_ACTIVITY',
+    id: 'act-ad2',
+    updates: { quantity: 500 }, // Ayni miqdor, hech narsa o'zgarmagan
+    dateStr: '2026-10-30',
+  });
+
+  assert(
+    updatedState.goals[0].currentValue === 500,
+    'ad2) O\'zgarishsiz update qilishda maqsad qiymati aynan saqlanadi'
+  );
+  assert(
+    updatedState.habits[0].history['2026-10-30'].quantity === 500,
+    'ad2) Odat tarixi o\'zgarmaydi'
+  );
+}
+
+// ad3) Bir maqsadga bog'langan ikki odat orasida teng miqdorli relink (net delta 0)
+{
+  const goalCommon: Goal = {
+    id: 'goal-common',
+    title: 'Yugurish jami',
+    category: 'maqsad',
+    deadline: '2026-12-31',
+    targetValue: 100,
+    currentValue: 0, // Chegara: 0
+    unit: 'km',
+    linkedHabitIds: ['habit-run-morning', 'habit-run-evening'],
+    status: 'active',
+  };
+
+  const habitMorning: Habit = {
+    id: 'habit-run-morning',
+    title: 'Ertalabki yugurish',
+    category: 'odat',
+    frequency: 'daily',
+    daysOfWeek: [1, 2, 3, 4, 5, 6, 7],
+    hasQuantity: true,
+    unit: 'km',
+    streak: 2,
+    bestStreak: 5,
+    linkedGoalId: 'goal-common',
+    history: {
+      '2026-10-30': {
+        completed: true,
+        quantity: 5,
+        activityContributions: {
+          'act-run': { quantity: 5, timestamp: '2026-10-30T07:00:00Z' },
+        },
+      },
+    },
+  };
+
+  const habitEvening: Habit = {
+    id: 'habit-run-evening',
+    title: 'Kechki yugurish',
+    category: 'odat',
+    frequency: 'daily',
+    daysOfWeek: [1, 2, 3, 4, 5, 6, 7],
+    hasQuantity: true,
+    unit: 'km',
+    streak: 0,
+    bestStreak: 2,
+    linkedGoalId: 'goal-common',
+    history: {},
+  };
+
+  const actRun: Activity = {
+    id: 'act-run',
+    title: 'Yugurish',
+    localDate: '2026-10-30',
+    category: 'sport',
+    quantity: 5,
+    unit: 'km',
+    linkedHabitId: 'habit-run-morning',
+    source: 'manual',
+    createdAt: '2026-10-30T07:00:00Z',
+  };
+
+  const state: DomainState = {
+    activities: [actRun],
+    habits: [habitMorning, habitEvening],
+    goals: [goalCommon],
+  };
+
+  // Faoliyatni morning habitidan evening habitiga o'tkazamiz (relink)
+  const updatedState = domainReducer(state, {
+    type: 'UPDATE_ACTIVITY',
+    id: 'act-run',
+    updates: { linkedHabitId: 'habit-run-evening' },
+    dateStr: '2026-10-30',
+  });
+
+  const updatedGoal = updatedState.goals.find(g => g.id === 'goal-common')!;
+  const updatedMorning = updatedState.habits.find(h => h.id === 'habit-run-morning')!;
+  const updatedEvening = updatedState.habits.find(h => h.id === 'habit-run-evening')!;
+
+  assert(
+    updatedGoal.currentValue === 0,
+    'ad3) Bir maqsadga bog\'langan odatlar orasida teng miqdorli relinkda net delta 0 bo\'lib, maqsad 0 chegarasida korruptsiya bo\'lmaydi'
+  );
+  assert(
+    (updatedMorning.history['2026-10-30']?.quantity || 0) === 0,
+    'ad3) Eski odatdan hissa olib tashlandi (quantity 0)'
+  );
+  assert(
+    updatedEvening.history['2026-10-30']?.quantity === 5,
+    'ad3) Yangi odatga hissa qo\'shildi (quantity 5)'
+  );
+}
+
+// ad4) Sana o'zgarishi, miqdor oshishi/kamayishi va decrease maqsadi
+{
+  const goalDecrease: Goal = {
+    id: 'goal-weight',
+    title: 'Vazn kamaytirish',
+    category: 'maqsad',
+    deadline: '2026-12-31',
+    targetValue: 70,
+    currentValue: 80, // Kamaytirish kerak: har faoliyat currentValue ni kamaytiradi
+    goalType: 'decrease',
+    unit: 'mashq',
+    linkedHabitIds: ['habit-workout'],
+    status: 'active',
+  };
+
+  const habitWorkout: Habit = {
+    id: 'habit-workout',
+    title: 'Mashq qilish',
+    category: 'odat',
+    frequency: 'daily',
+    daysOfWeek: [1, 2, 3, 4, 5, 6, 7],
+    hasQuantity: true,
+    unit: 'mashq',
+    streak: 1,
+    bestStreak: 3,
+    linkedGoalId: 'goal-weight',
+    history: {
+      '2026-10-28': {
+        completed: true,
+        quantity: 2,
+        activityContributions: {
+          'act-wk': { quantity: 2, timestamp: '2026-10-28T10:00:00Z' },
+        },
+      },
+    },
+  };
+
+  const actWk: Activity = {
+    id: 'act-wk',
+    title: 'Kardio mashq',
+    localDate: '2026-10-28',
+    category: 'sport',
+    quantity: 2,
+    unit: 'mashq',
+    linkedHabitId: 'habit-workout',
+    source: 'manual',
+    createdAt: '2026-10-28T10:00:00Z',
+  };
+
+  let state: DomainState = {
+    activities: [actWk],
+    habits: [habitWorkout],
+    goals: [goalDecrease],
+  };
+
+  // 1. Miqdorni 2 dan 5 ga oshirish (delta +3): decrease goal uchun 80 - 3 = 77 bo'lishi kerak
+  state = domainReducer(state, {
+    type: 'UPDATE_ACTIVITY',
+    id: 'act-wk',
+    updates: { quantity: 5 },
+    dateStr: '2026-10-30',
+  });
+  assert(
+    state.goals[0].currentValue === 77,
+    'ad4) Decrease goal: miqdor oshganda (2 -> 5) maqsad qiymati 80 - 3 = 77 ga kamayadi'
+  );
+
+  // 2. Miqdorni 5 dan 3 ga kamaytirish (delta -2): decrease goal uchun 77 - (-2) = 79 bo'lishi kerak
+  state = domainReducer(state, {
+    type: 'UPDATE_ACTIVITY',
+    id: 'act-wk',
+    updates: { quantity: 3 },
+    dateStr: '2026-10-30',
+  });
+  assert(
+    state.goals[0].currentValue === 79,
+    'ad4) Decrease goal: miqdor kamayganda (5 -> 3) maqsad qiymati 77 + 2 = 79 ga qaytadi'
+  );
+
+  // 3. Sanani o'zgartirish (2026-10-28 dan 2026-10-29 ga, miqdor 3 o'zgarmagan):
+  // Eski sanadan -3 olib tashlanadi, yangi sanaga +3 qo'shiladi -> net delta = 0!
+  state = domainReducer(state, {
+    type: 'UPDATE_ACTIVITY',
+    id: 'act-wk',
+    updates: { localDate: '2026-10-29' },
+    dateStr: '2026-10-30',
+  });
+  assert(
+    state.goals[0].currentValue === 79,
+    'ad4) Sana o\'zgarganda miqdor teng bo\'lgani uchun maqsad qiymati 79 holida aynan saqlanadi'
+  );
+  assert(
+    (state.habits[0].history['2026-10-28']?.quantity || 0) === 0,
+    'ad4) Eski sanadagi hissa tozalangan'
+  );
+  assert(
+    state.habits[0].history['2026-10-29']?.quantity === 3,
+    'ad4) Yangi sanadagi hissa saqlangan'
+  );
+}
+
+// ad5) Net delta 0 bo'lsa goal qiymati aynan saqlanishi
+{
+  const goalP: Goal = {
+    id: 'goal-p',
+    title: 'Kitob mutolaasi',
+    category: 'maqsad',
+    deadline: '2026-12-31',
+    targetValue: 500,
+    currentValue: 120,
+    unit: 'bet',
+    linkedHabitIds: ['habit-read-1'],
+    status: 'active',
+  };
+
+  const habitRead: Habit = {
+    id: 'habit-read-1',
+    title: 'Kitob',
+    category: 'odat',
+    frequency: 'daily',
+    daysOfWeek: [1, 2, 3, 4, 5, 6, 7],
+    hasQuantity: true,
+    unit: 'bet',
+    streak: 1,
+    bestStreak: 1,
+    linkedGoalId: 'goal-p',
+    history: {
+      '2026-10-30': {
+        completed: true,
+        quantity: 15,
+        activityContributions: {
+          'act-rd': { quantity: 15, timestamp: '2026-10-30T10:00:00Z' },
+        },
+      },
+    },
+  };
+
+  const actRd: Activity = {
+    id: 'act-rd',
+    title: 'Kitob',
+    localDate: '2026-10-30',
+    category: 'talim',
+    quantity: 15,
+    unit: 'bet',
+    linkedHabitId: 'habit-read-1',
+    source: 'manual',
+    createdAt: '2026-10-30T10:00:00Z',
+  };
+
+  const state: DomainState = {
+    activities: [actRd],
+    habits: [habitRead],
+    goals: [goalP],
+  };
+
+  const updatedState = domainReducer(state, {
+    type: 'UPDATE_ACTIVITY',
+    id: 'act-rd',
+    updates: { quantity: 15, durationMinutes: 45 },
+    dateStr: '2026-10-30',
+  });
+
+  assert(
+    updatedState.goals[0].currentValue === 120,
+    'ad5) Net delta 0 bo\'lganda goal currentValue aynan 120 saqlanadi'
+  );
+  assert(
+    updatedState.goals[0] === goalP,
+    'ad5) Net delta 0 bo\'lganda goal ob\'ekti keraksiz mutatsiya qilinmasdan referensi saqlanadi'
+  );
+}
+
+// ============================================================================
+// TEST SUITE AE: parseAndValidateBackup Strict Candidate-State Import Validation
+// ============================================================================
+
+const dummyContext: BackupValidationContext = {
+  todayStr: '2026-10-30',
+  currentTasks: [
+    {
+      id: 'task-1',
+      title: 'Hisobot tayyorlash',
+      category: 'vazifa',
+      date: '2026-10-30',
+      status: 'pending',
+      priority: 'high',
+      source: 'bot',
+    },
+  ],
+  currentHabits: [
+    {
+      id: 'habit-1',
+      title: 'Ertalabki badantarbiya',
+      category: 'odat',
+      frequency: 'daily',
+      daysOfWeek: [1, 2, 3, 4, 5, 6, 7],
+      hasQuantity: false,
+      streak: 3,
+      bestStreak: 5,
+      history: {},
+    },
+  ],
+  currentGoals: [
+    {
+      id: 'goal-1',
+      title: 'Sog\'lom hayot',
+      category: 'maqsad',
+      deadline: '2026-12-31',
+      targetValue: 100,
+      currentValue: 10,
+      unit: 'marta',
+      linkedHabitIds: ['habit-1'],
+      status: 'active',
+    },
+  ],
+  currentExpenses: [
+    {
+      id: 'exp-1',
+      title: 'Tushlik',
+      amount: 45000,
+      category: 'oziq_ovqat',
+      date: '2026-10-30',
+      source: 'bot',
+    },
+  ],
+  currentActivities: [
+    {
+      id: 'act-1',
+      title: 'Badantarbiya',
+      localDate: '2026-10-30',
+      category: 'sport',
+      durationMinutes: 20,
+      linkedHabitId: 'habit-1',
+      source: 'manual',
+      createdAt: '2026-10-30T07:00:00Z',
+    },
+  ],
+  currentSettings: {
+    name: 'Foydalanuvchi',
+    username: 'user',
+    timezone: 'Asia/Tashkent',
+    morningTime: '08:00',
+    eveningTime: '21:00',
+    reminderSound: true,
+    aiEnabled: true,
+  },
+};
+
+// ae1) Invalid history & missing mandatory fields
+{
+  // a) Bo'sh JSON matni
+  const rEmpty = parseAndValidateBackup('', dummyContext);
+  assert(!rEmpty.isValid, 'ae1) Bo\'sh matn rad etiladi');
+
+  // b) Buzilgan JSON
+  const rCorrupt = parseAndValidateBackup('{not json', dummyContext);
+  assert(!rCorrupt.isValid, 'ae1) Sintaktik buzilgan JSON rad etiladi');
+
+  // c) Sarlavhasiz vazifa
+  const rNoTitleTask = parseAndValidateBackup(
+    JSON.stringify({
+      tasks: [{ id: 't-1', date: '2026-10-30', status: 'pending' }],
+    }),
+    dummyContext
+  );
+  assert(!rNoTitleTask.isValid, 'ae1) Sarlavhasi yo\'q vazifa rad etiladi');
+
+  // d) Noto'g'ri sanali vazifa
+  const rBadDateTask = parseAndValidateBackup(
+    JSON.stringify({
+      tasks: [{ id: 't-1', title: 'Test', date: '2026-02-31', status: 'pending' }],
+    }),
+    dummyContext
+  );
+  assert(!rBadDateTask.isValid, 'ae1) Kalendarda yo\'q sana (2026-02-31) vazifada rad etiladi');
+
+  // e) Yaroqsiz habit frequency
+  const rBadFreq = parseAndValidateBackup(
+    JSON.stringify({
+      habits: [{ id: 'h-1', title: 'Test', frequency: 'invalid_frequency' }],
+    }),
+    dummyContext
+  );
+  assert(!rBadFreq.isValid, 'ae1) Noto\'g\'ri habit frequency rad etiladi');
+
+  // f) Yaroqsiz history sanasi
+  const rBadHist = parseAndValidateBackup(
+    JSON.stringify({
+      habits: [
+        {
+          id: 'h-1',
+          title: 'Test',
+          frequency: 'daily',
+          daysOfWeek: [1, 2, 3, 4, 5, 6, 7],
+          hasQuantity: false,
+          history: { 'not-a-date': { completed: true } },
+        },
+      ],
+    }),
+    dummyContext
+  );
+  assert(!rBadHist.isValid, 'ae1) Tarixdagi noto\'g\'ri sana kaliti rad etiladi');
+
+  // g) Manfiy xarajat
+  const rNegExp = parseAndValidateBackup(
+    JSON.stringify({
+      expenses: [{ id: 'e-1', title: 'Xarajat', amount: -5000, date: '2026-10-30', category: 'oziq_ovqat' }],
+    }),
+    dummyContext
+  );
+  assert(!rNegExp.isValid, 'ae1) Manfiy summa bilan xarajat rad etiladi');
+}
+
+// ae2) Duplicate habit/task/goal IDs
+{
+  const rDupTask = parseAndValidateBackup(
+    JSON.stringify({
+      tasks: [
+        { id: 'dup-task', title: 'Vazifa 1', date: '2026-10-30', status: 'pending' },
+        { id: 'dup-task', title: 'Vazifa 2', date: '2026-10-30', status: 'pending' },
+      ],
+    }),
+    dummyContext
+  );
+  assert(!rDupTask.isValid, 'ae2) Takroriy vazifa ID\'si rad etiladi');
+
+  const rDupHabit = parseAndValidateBackup(
+    JSON.stringify({
+      habits: [
+        { id: 'dup-habit', title: 'Odat 1', frequency: 'daily', daysOfWeek: [1], hasQuantity: false },
+        { id: 'dup-habit', title: 'Odat 2', frequency: 'daily', daysOfWeek: [1], hasQuantity: false },
+      ],
+    }),
+    dummyContext
+  );
+  assert(!rDupHabit.isValid, 'ae2) Takroriy odat ID\'si rad etiladi');
+
+  const rDupGoal = parseAndValidateBackup(
+    JSON.stringify({
+      goals: [
+        { id: 'dup-goal', title: 'Maqsad 1', targetValue: 100, currentValue: 10, unit: 'm', status: 'active', deadline: '2026-12-31' },
+        { id: 'dup-goal', title: 'Maqsad 2', targetValue: 100, currentValue: 10, unit: 'm', status: 'active', deadline: '2026-12-31' },
+      ],
+    }),
+    dummyContext
+  );
+  assert(!rDupGoal.isValid, 'ae2) Takroriy maqsad ID\'si rad etiladi');
+}
+
+// ae3) Legacy backup without activities breaking habit/task links
+{
+  // dummyContext'dagi mavjud act-1 habit-1 ga bog'langan.
+  // Agar legacy backup'da faoliyatlar kaliti bo'lmasa va habits ichida habit-1 yo'q bo'lsa:
+  const rLegacyBroken = parseAndValidateBackup(
+    JSON.stringify({
+      tasks: [{ id: 'task-legacy', title: 'Vazifa', date: '2026-10-30', status: 'pending' }],
+      habits: [{ id: 'other-habit', title: 'Boshqa odat', frequency: 'daily', daysOfWeek: [1], hasQuantity: false }],
+      // 'activities' maydoni yo'q
+    }),
+    dummyContext
+  );
+
+  assert(
+    !rLegacyBroken.isValid,
+    'ae3) Activities kaliti yo\'q eski backup mavjud faoliyatning bog\'lanishini buzsa rad etiladi'
+  );
+}
+
+// ae4) Export -> import -> export round-trip preserving progress and contributions
+{
+  const fullBackup = {
+    appName: 'Kunlik Yordamchi',
+    exportDate: '2026-10-30T12:00:00Z',
+    tasks: [
+      {
+        id: 't-full-1',
+        title: 'Hujjatlarni tekshirish',
+        category: 'vazifa',
+        date: '2026-10-30',
+        status: 'completed',
+        priority: 'high',
+        source: 'miniapp',
+      },
+    ],
+    habits: [
+      {
+        id: 'h-full-1',
+        title: 'Kitob mutolaasi',
+        category: 'odat',
+        frequency: 'daily',
+        daysOfWeek: [1, 2, 3, 4, 5, 6, 7],
+        hasQuantity: true,
+        targetQuantity: 30,
+        unit: 'bet',
+        streak: 7,
+        bestStreak: 14,
+        linkedGoalId: 'g-full-1',
+        history: {
+          '2026-10-30': {
+            completed: true,
+            quantity: 30,
+            activityContributions: {
+              'act-full-1': { quantity: 30, timestamp: '2026-10-30T10:00:00Z' },
+            },
+          },
+        },
+      },
+    ],
+    goals: [
+      {
+        id: 'g-full-1',
+        title: '10 ta kitob',
+        category: 'maqsad',
+        deadline: '2026-12-31',
+        targetValue: 300,
+        currentValue: 150,
+        unit: 'bet',
+        linkedHabitIds: ['h-full-1'],
+        status: 'active',
+      },
+    ],
+    expenses: [
+      {
+        id: 'e-full-1',
+        title: 'Kitob sotib olish',
+        amount: 85000,
+        category: 'talim',
+        date: '2026-10-30',
+        source: 'miniapp',
+      },
+    ],
+    activities: [
+      {
+        id: 'act-full-1',
+        title: 'Kitob o\'qish',
+        localDate: '2026-10-30',
+        category: 'talim',
+        durationMinutes: 45,
+        quantity: 30,
+        unit: 'bet',
+        linkedHabitId: 'h-full-1',
+        source: 'manual',
+        createdAt: '2026-10-30T10:00:00Z',
+      },
+    ],
+    settings: {
+      name: 'Sherzod',
+      username: 'sherzod',
+      timezone: 'Asia/Tashkent',
+      morningTime: '07:30',
+      eveningTime: '22:00',
+      reminderSound: true,
+      aiEnabled: true,
+      monthlyExpenseBudget: 5000000,
+    },
+  };
+
+  const jsonExport1 = JSON.stringify(fullBackup);
+  const importRes = parseAndValidateBackup(jsonExport1, dummyContext);
+
+  assert(importRes.isValid, 'ae4) To\'liq backup muvaffaqiyatli validatsiyadan o\'tadi');
+  if (importRes.isValid) {
+    const candidate = importRes.candidateData;
+    assert(candidate.tasks.length === 1, 'ae4) Vazifalar to\'liq yuklandi');
+    assert(candidate.habits[0].history['2026-10-30'].activityContributions?.['act-full-1']?.quantity === 30, 'ae4) activityContributions bus-butun saqlandi');
+    assert(candidate.goals[0].currentValue === 150, 'ae4) Maqsad progressi to\'liq saqlandi');
+    assert(candidate.activities[0].quantity === 30, 'ae4) Faoliyat saqlandi');
+
+    // Round-trip serialization
+    const reExport = {
+      appName: 'Kunlik Yordamchi',
+      exportDate: fullBackup.exportDate,
+      tasks: candidate.tasks,
+      habits: candidate.habits,
+      goals: candidate.goals,
+      expenses: candidate.expenses,
+      activities: candidate.activities,
+      settings: candidate.settings,
+    };
+    const jsonExport2 = JSON.stringify(reExport);
+    assert(jsonExport1 === jsonExport2, 'ae4) Export -> import -> export round-trip 100% teng bo\'lib saqlanadi');
+  }
+}
+
+// ae5) Rejected import leaves all state completely untouched
+{
+  const corruptJson = JSON.stringify({
+    tasks: [{ id: 't-1' }], // Missing title, date, etc.
+  });
+
+  const res = parseAndValidateBackup(corruptJson, dummyContext);
+  assert(!res.isValid, 'ae5) Noto\'g\'ri backup rad etildi');
+  assert(dummyContext.currentTasks.length === 1, 'ae5) Kontekstdagi vazifalar o\'zgarmay qoldi');
+  assert(dummyContext.currentHabits.length === 1, 'ae5) Kontekstdagi odatlar o\'zgarmay qoldi');
+  assert(dummyContext.currentGoals.length === 1, 'ae5) Kontekstdagi maqsadlar o\'zgarmay qoldi');
 }
 
 console.log(`\n========================================`);

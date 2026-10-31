@@ -8,6 +8,7 @@ import {
   calculateHabitStreakAndStats,
   calculateInternalHabitStats,
   validateActivity,
+  areUnitsCompatible,
 } from '../utils/domainCalculations';
 
 export interface DomainState {
@@ -296,57 +297,112 @@ export function domainReducer(state: DomainState, action: DomainAction): DomainS
         return state; // Noto'g'ri amalda state'ning hech bir qismi o'zgarmasin
       }
 
-      let currentHabits = state.habits;
-      let currentGoals = state.goals;
-
+      // Contribution-relevant o'zgarishlar mavjudligini aniqlaymiz:
       const oldHabitId = existing.linkedHabitId;
-      const oldDate = existing.localDate;
       const newHabitId = candidate.linkedHabitId;
+      const oldDate = existing.localDate;
       const newDate = candidate.localDate;
+      const oldQty = existing.quantity;
+      const newQty = candidate.quantity;
+      const oldUnit = existing.unit;
+      const newUnit = candidate.unit;
 
-      // Step A: if existing had a linked habit, remove old contribution
+      const contributionChanged =
+        oldHabitId !== newHabitId ||
+        oldDate !== newDate ||
+        oldQty !== newQty ||
+        oldUnit !== newUnit;
+
+      if (!contributionChanged) {
+        // Faqat title, notes, category, time, duration yoki linkedTaskId tahrirlanganda
+        // odat tarixi, streak va maqsad progressi umuman o'zgarmaydi.
+        return {
+          ...state,
+          activities: state.activities.map(a => (a.id === action.id ? candidate : a)),
+        };
+      }
+
+      let currentHabits = state.habits;
+      const goalNetDeltas = new Map<string, number>();
+
+      // 1. Agar avvalgi faoliyat odatga bog'langan bo'lsa, avval uning hissasini odat tarixidan olib tashlaymiz
       if (oldHabitId) {
         const oldHabit = currentHabits.find(h => h.id === oldHabitId);
         if (oldHabit) {
-          const oldGoal = oldHabit.linkedGoalId
-            ? currentGoals.find(g => g.id === oldHabit.linkedGoalId)
-            : undefined;
-
           const res = removeActivityContributionFromHabit(
             oldHabit,
-            oldGoal,
+            undefined, // Maqsad bu yerda o'zgartirilmaydi; umumiy net delta bilan bir marta yangilanadi
             existing.id,
             oldDate,
             action.dateStr
           );
 
           currentHabits = currentHabits.map(h => (h.id === res.updatedHabit.id ? res.updatedHabit : h));
-          if (res.updatedGoal) {
-            currentGoals = currentGoals.map(g => (g.id === res.updatedGoal!.id ? res.updatedGoal! : g));
+
+          if (oldHabit.linkedGoalId && res.actualDelta !== 0) {
+            const oldGoal = state.goals.find(g => g.id === oldHabit.linkedGoalId);
+            if (oldGoal && areUnitsCompatible(oldHabit.unit, oldGoal.unit)) {
+              goalNetDeltas.set(
+                oldGoal.id,
+                (goalNetDeltas.get(oldGoal.id) || 0) + res.actualDelta
+              );
+            }
           }
         }
       }
 
-      // Step B: if candidate has a linked habit, apply new contribution
+      // 2. Agar yangilangan faoliyat odatga bog'langan bo'lsa, yangi hissani qo'shamiz
+      // (Eslatma: agar oldHabitId === newHabitId bo'lsa, currentHabits ichida eski hissa allaqachon tozalangan)
       if (newHabitId) {
         const newHabit = currentHabits.find(h => h.id === newHabitId);
         if (newHabit) {
-          const newGoal = newHabit.linkedGoalId
-            ? currentGoals.find(g => g.id === newHabit.linkedGoalId)
-            : undefined;
-
           const res = applyActivityContributionToHabit(
             newHabit,
-            newGoal,
+            undefined, // Maqsad bu yerda o'zgartirilmaydi
             candidate,
             action.dateStr
           );
 
           currentHabits = currentHabits.map(h => (h.id === res.updatedHabit.id ? res.updatedHabit : h));
-          if (res.updatedGoal) {
-            currentGoals = currentGoals.map(g => (g.id === res.updatedGoal!.id ? res.updatedGoal! : g));
+
+          if (newHabit.linkedGoalId && res.actualDelta !== 0) {
+            const newGoal = state.goals.find(g => g.id === newHabit.linkedGoalId);
+            if (newGoal && areUnitsCompatible(newHabit.unit, newGoal.unit)) {
+              goalNetDeltas.set(
+                newGoal.id,
+                (goalNetDeltas.get(newGoal.id) || 0) + res.actualDelta
+              );
+            }
           }
         }
+      }
+
+      // 3. Yakuniy net delta har bir ta'sirlangan maqsadga aynan bir marta qo'llanadi
+      let currentGoals = state.goals;
+      if (goalNetDeltas.size > 0) {
+        currentGoals = currentGoals.map(goal => {
+          const netDelta = goalNetDeltas.get(goal.id);
+          if (netDelta === undefined || netDelta === 0) {
+            // Net delta 0 bo'lsa (masalan, ayni maqsadga bog'langan ikki odat orasida teng relink):
+            // goal qiymati aynan o'zgarishsiz saqlanadi (0 chegarasidagi buzilishlar to'liq bartaraf etiladi)
+            return goal;
+          }
+
+          const isDecrease = goal.goalType === 'decrease';
+          const nextVal = isDecrease
+            ? Math.max(0, goal.currentValue - netDelta)
+            : Math.max(0, goal.currentValue + netDelta);
+
+          const isAchieved = isDecrease
+            ? nextVal <= goal.targetValue
+            : nextVal >= goal.targetValue;
+
+          return {
+            ...goal,
+            currentValue: nextVal,
+            status: isAchieved ? 'achieved' : 'active',
+          };
+        });
       }
 
       return {

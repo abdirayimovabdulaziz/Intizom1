@@ -37,6 +37,8 @@ import {
   getIanaTimezone,
   applyHabitCompletionStatus,
   validateActivity,
+  parseAndValidateBackup,
+  BackupValidationContext,
 } from '../utils/domainCalculations';
 import {
   domainReducer,
@@ -670,150 +672,47 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const importDataFromJson = (jsonStr: string): { success: boolean; message: string } => {
-    try {
-      const data = JSON.parse(jsonStr);
-      if (!data || typeof data !== 'object') {
-        triggerHaptic('error');
-        return { success: false, message: "JSON fayli noto'g'ri shakllangan." };
-      }
+    const context: BackupValidationContext = {
+      todayStr: activeTodayStr,
+      currentTasks: tasks,
+      currentHabits: domainState.habits,
+      currentGoals: domainState.goals,
+      currentExpenses: expenses,
+      currentActivities: domainState.activities,
+      currentSettings: settings,
+    };
 
-      // 1. Tasks validation
-      let candidateTasks: Task[] | undefined;
-      if ('tasks' in data) {
-        if (!Array.isArray(data.tasks)) {
-          triggerHaptic('error');
-          return { success: false, message: "Tasks formati noto'g'ri (massiv bo'lishi kerak)." };
-        }
-        for (const t of data.tasks) {
-          if (!t || typeof t !== 'object' || typeof t.id !== 'string' || !t.id.trim() || typeof t.title !== 'string' || !t.title.trim()) {
-            triggerHaptic('error');
-            return { success: false, message: "Tasks ichida yaroqsiz vazifa topildi." };
-          }
-        }
-        candidateTasks = data.tasks;
-      }
-
-      // 2. Habits validation
-      let candidateHabits: Habit[] | undefined;
-      if ('habits' in data) {
-        if (!Array.isArray(data.habits)) {
-          triggerHaptic('error');
-          return { success: false, message: "Habits formati noto'g'ri (massiv bo'lishi kerak)." };
-        }
-        for (const h of data.habits) {
-          if (!h || typeof h !== 'object' || typeof h.id !== 'string' || !h.id.trim() || typeof h.title !== 'string' || !h.title.trim()) {
-            triggerHaptic('error');
-            return { success: false, message: "Habits ichida yaroqsiz odat topildi." };
-          }
-        }
-        candidateHabits = data.habits;
-      }
-
-      // 3. Goals validation
-      let candidateGoals: Goal[] | undefined;
-      if ('goals' in data) {
-        if (!Array.isArray(data.goals)) {
-          triggerHaptic('error');
-          return { success: false, message: "Goals formati noto'g'ri (massiv bo'lishi kerak)." };
-        }
-        for (const g of data.goals) {
-          if (!g || typeof g !== 'object' || typeof g.id !== 'string' || !g.id.trim() || typeof g.title !== 'string' || !g.title.trim()) {
-            triggerHaptic('error');
-            return { success: false, message: "Goals ichida yaroqsiz maqsad topildi." };
-          }
-        }
-        candidateGoals = data.goals;
-      }
-
-      // 4. Expenses validation
-      let candidateExpenses: Expense[] | undefined;
-      if ('expenses' in data) {
-        if (!Array.isArray(data.expenses)) {
-          triggerHaptic('error');
-          return { success: false, message: "Expenses formati noto'g'ri (massiv bo'lishi kerak)." };
-        }
-        for (const e of data.expenses) {
-          if (!e || typeof e !== 'object' || typeof e.id !== 'string' || typeof e.amount !== 'number' || !Number.isFinite(e.amount)) {
-            triggerHaptic('error');
-            return { success: false, message: "Expenses ichida yaroqsiz xarajat topildi." };
-          }
-        }
-        candidateExpenses = data.expenses;
-      }
-
-      // 5. Activities validation
-      const effectiveHabits = candidateHabits || domainState.habits;
-      const effectiveTasks = candidateTasks || tasks;
-      let candidateActivities: Activity[] | undefined;
-
-      if ('activities' in data) {
-        if (!Array.isArray(data.activities)) {
-          triggerHaptic('error');
-          return { success: false, message: "Activities formati noto'g'ri (massiv bo'lishi kerak)." };
-        }
-
-        const seenIds = new Set<string>();
-        for (const act of data.activities) {
-          if (!act || typeof act !== 'object' || typeof act.id !== 'string' || !act.id.trim()) {
-            triggerHaptic('error');
-            return { success: false, message: "Faoliyat ID'si yaroqsiz yoki mavjud emas." };
-          }
-          if (seenIds.has(act.id)) {
-            triggerHaptic('error');
-            return { success: false, message: `Takroriy faoliyat ID'si aniqlandi: "${act.id}"` };
-          }
-          seenIds.add(act.id);
-
-          const val = validateActivity(act, activeTodayStr, { habits: effectiveHabits, tasks: effectiveTasks });
-          if (!val.isValid) {
-            triggerHaptic('error');
-            return { success: false, message: `Faoliyat validatsiyadan o'tmadi: ${val.error}` };
-          }
-        }
-        candidateActivities = data.activities;
-      } else {
-        // Activities kaliti yo'q eski backup mavjud faoliyatlarni saqlab qolsin
-        candidateActivities = domainState.activities;
-      }
-
-      // ONLY WHEN ALL VALIDATIONS PASS, APPLY STATE CHANGES ATOMICALLY:
-      if (candidateTasks) {
-        setTasks(candidateTasks);
-      }
-      if (candidateExpenses) {
-        setExpenses(candidateExpenses);
-      }
-
-      domainDispatch({
-        type: 'RESET_DOMAIN',
-        activities: candidateActivities,
-        habits: candidateHabits || domainState.habits,
-        goals: candidateGoals || domainState.goals,
-      });
-
-      if (data.settings && typeof data.settings === 'object') {
-        setSettings(prev => ({ ...prev, ...data.settings }));
-      }
-
-      const loadedCount =
-        (candidateTasks?.length || 0) +
-        (candidateHabits?.length || 0) +
-        (candidateGoals?.length || 0) +
-        (candidateExpenses?.length || 0) +
-        (candidateActivities?.length || 0);
-
-      triggerHaptic('success');
-      return {
-        success: true,
-        message: `Muvaffaqiyatli tiklandi! Jami ${loadedCount} ta yozuv yuklandi.`,
-      };
-    } catch {
+    const valResult = parseAndValidateBackup(jsonStr, context);
+    if (!valResult.isValid) {
       triggerHaptic('error');
       return {
         success: false,
-        message: "JSON fayli formati noto'g'ri yoki buzilgan.",
+        message: valResult.error,
       };
     }
+
+    const { candidateData, loadedCount } = valResult;
+
+    // Barcha tekshiruvlar to'liq o'tgachgina atomik tarzda yangilanadi (all-or-nothing kafolati)
+    setTasks(candidateData.tasks);
+    setExpenses(candidateData.expenses);
+
+    domainDispatch({
+      type: 'RESET_DOMAIN',
+      activities: candidateData.activities,
+      habits: candidateData.habits,
+      goals: candidateData.goals,
+    });
+
+    if (candidateData.settings) {
+      setSettings(prev => ({ ...prev, ...candidateData.settings }));
+    }
+
+    triggerHaptic('success');
+    return {
+      success: true,
+      message: `Muvaffaqiyatli tiklandi! Jami ${loadedCount} ta yozuv yuklandi.`,
+    };
   };
 
   const getTimeString = () => {
