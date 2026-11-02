@@ -1,7 +1,13 @@
 -- ==============================================================================
 -- Kunlik Yordamchi - PostgreSQL / Supabase Hotfix Migration
 -- File: 20261102_secure_save_user_snapshot.sql
--- Fixes:
+--
+-- MUHIM MIGRATSIYA TARTIBI:
+-- Yangi bo'sh bazada BIRINCHI navbatda "20261101_init_user_snapshots.sql" bajarilishi shart!
+-- (Chunki user_snapshots jadvali, indekslar, RLS va triggerlar 1-faylda yaratiladi).
+-- Faqat 2-faylni bajarish bo'sh bazada jadval bo'lmagani uchun yetarli emas va xato beradi.
+--
+-- Ushbu 2-fayl vazifasi:
 -- 1. Restricts save_user_snapshot SECURITY DEFINER execution to service_role ONLY.
 -- 2. Revokes execution from PUBLIC, anon, and authenticated roles.
 -- 3. Sets strict search_path = public, pg_temp to prevent search_path hijacking.

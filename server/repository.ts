@@ -171,174 +171,76 @@ export class SupabaseUserStateRepository implements IUserStateRepository {
       p_first_name: input.firstName || null,
     });
 
-    if (!rpcError && rpcData) {
-      if (rpcData.status === 'idempotent_replay') {
-        const raw = rpcData.record;
-        return {
-          status: 'idempotent_replay',
-          isIdempotentReplay: true,
-          record: {
-            userId: raw.user_id,
-            telegramUsername: raw.telegram_username,
-            telegramFirstName: raw.telegram_first_name,
-            schemaVersion: raw.schema_version,
-            revision: Number(raw.revision),
-            lastOperationId: raw.last_operation_id,
-            snapshot: raw.snapshot,
-            createdAt: raw.created_at,
-            updatedAt: raw.updated_at,
-          },
-        };
-      }
-
-      if (rpcData.status === 'conflict') {
-        const raw = rpcData.serverRecord;
-        return {
-          status: 'conflict',
-          currentRevision: Number(rpcData.currentRevision),
-          serverRecord: raw
-            ? {
-                userId: raw.user_id,
-                telegramUsername: raw.telegram_username,
-                telegramFirstName: raw.telegram_first_name,
-                schemaVersion: raw.schema_version,
-                revision: Number(raw.revision),
-                lastOperationId: raw.last_operation_id,
-                snapshot: raw.snapshot,
-                createdAt: raw.created_at,
-                updatedAt: raw.updated_at,
-              }
-            : null,
-        };
-      }
-
-      if (rpcData.status === 'saved' && rpcData.record) {
-        const raw = rpcData.record;
-        return {
-          status: 'saved',
-          record: {
-            userId: raw.user_id,
-            telegramUsername: raw.telegram_username,
-            telegramFirstName: raw.telegram_first_name,
-            schemaVersion: raw.schema_version,
-            revision: Number(raw.revision),
-            lastOperationId: raw.last_operation_id,
-            snapshot: raw.snapshot,
-            createdAt: raw.created_at,
-            updatedAt: raw.updated_at,
-          },
-        };
-      }
+    if (rpcError) {
+      throw new Error(`save_user_snapshot RPC xatosi: ${rpcError.message || JSON.stringify(rpcError)}`);
     }
 
-    // Direct table query fallback if RPC function was not created yet
-    const existing = await this.get(userId);
+    if (!rpcData || typeof rpcData !== 'object') {
+      throw new Error('save_user_snapshot RPC dan kutilmagan javob qaytdi.');
+    }
 
-    if (existing) {
-      if (input.operationId && existing.lastOperationId === input.operationId) {
-        return {
-          status: 'idempotent_replay',
-          isIdempotentReplay: true,
-          record: existing,
-        };
+    if (rpcData.status === 'idempotent_replay') {
+      const raw = rpcData.record;
+      if (!raw) {
+        throw new Error('save_user_snapshot idempotent_replay holatida kutilgan record mavjud emas.');
       }
-
-      if (existing.revision !== input.expectedRevision) {
-        return {
-          status: 'conflict',
-          currentRevision: existing.revision,
-          serverRecord: existing,
-        };
-      }
-
-      const nextRevision = existing.revision + 1;
-      const { data: updated, error: updateError } = await this.client
-        .from('user_snapshots')
-        .update({
-          snapshot: input.snapshot,
-          revision: nextRevision,
-          schema_version: input.schemaVersion || 1,
-          last_operation_id: input.operationId,
-          telegram_username: input.username || existing.telegramUsername,
-          telegram_first_name: input.firstName || existing.telegramFirstName,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('user_id', userId)
-        .eq('revision', input.expectedRevision)
-        .select()
-        .single();
-
-      if (updateError || !updated) {
-        // Concurrency collision occurred during update
-        const latest = await this.get(userId);
-        return {
-          status: 'conflict',
-          currentRevision: latest?.revision || existing.revision,
-          serverRecord: latest,
-        };
-      }
-
       return {
-        status: 'saved',
+        status: 'idempotent_replay',
+        isIdempotentReplay: true,
         record: {
-          userId: updated.user_id,
-          telegramUsername: updated.telegram_username,
-          telegramFirstName: updated.telegram_first_name,
-          schemaVersion: updated.schema_version,
-          revision: Number(updated.revision),
-          lastOperationId: updated.last_operation_id,
-          snapshot: updated.snapshot,
-          createdAt: updated.created_at,
-          updatedAt: updated.updated_at,
-        },
-      };
-    } else {
-      if (input.expectedRevision !== 0 && input.expectedRevision !== null) {
-        return {
-          status: 'conflict',
-          currentRevision: 0,
-          serverRecord: null,
-        };
-      }
-
-      const { data: inserted, error: insertError } = await this.client
-        .from('user_snapshots')
-        .insert({
-          user_id: userId,
-          telegram_username: input.username,
-          telegram_first_name: input.firstName,
-          schema_version: input.schemaVersion || 1,
-          revision: 1,
-          last_operation_id: input.operationId,
-          snapshot: input.snapshot,
-        })
-        .select()
-        .single();
-
-      if (insertError || !inserted) {
-        const latest = await this.get(userId);
-        return {
-          status: 'conflict',
-          currentRevision: latest?.revision || 0,
-          serverRecord: latest,
-        };
-      }
-
-      return {
-        status: 'saved',
-        record: {
-          userId: inserted.user_id,
-          telegramUsername: inserted.telegram_username,
-          telegramFirstName: inserted.telegram_first_name,
-          schemaVersion: inserted.schema_version,
-          revision: Number(inserted.revision),
-          lastOperationId: inserted.last_operation_id,
-          snapshot: inserted.snapshot,
-          createdAt: inserted.created_at,
-          updatedAt: inserted.updated_at,
+          userId: raw.user_id,
+          telegramUsername: raw.telegram_username,
+          telegramFirstName: raw.telegram_first_name,
+          schemaVersion: raw.schema_version,
+          revision: Number(raw.revision),
+          lastOperationId: raw.last_operation_id,
+          snapshot: raw.snapshot,
+          createdAt: raw.created_at,
+          updatedAt: raw.updated_at,
         },
       };
     }
+
+    if (rpcData.status === 'conflict') {
+      const raw = rpcData.serverRecord;
+      return {
+        status: 'conflict',
+        currentRevision: Number(rpcData.currentRevision ?? 0),
+        serverRecord: raw
+          ? {
+              userId: raw.user_id,
+              telegramUsername: raw.telegram_username,
+              telegramFirstName: raw.telegram_first_name,
+              schemaVersion: raw.schema_version,
+              revision: Number(raw.revision),
+              lastOperationId: raw.last_operation_id,
+              snapshot: raw.snapshot,
+              createdAt: raw.created_at,
+              updatedAt: raw.updated_at,
+            }
+          : null,
+      };
+    }
+
+    if (rpcData.status === 'saved' && rpcData.record) {
+      const raw = rpcData.record;
+      return {
+        status: 'saved',
+        record: {
+          userId: raw.user_id,
+          telegramUsername: raw.telegram_username,
+          telegramFirstName: raw.telegram_first_name,
+          schemaVersion: raw.schema_version,
+          revision: Number(raw.revision),
+          lastOperationId: raw.last_operation_id,
+          snapshot: raw.snapshot,
+          createdAt: raw.created_at,
+          updatedAt: raw.updated_at,
+        },
+      };
+    }
+
+    throw new Error(`save_user_snapshot RPC noma'lum status qaytardi: ${rpcData.status}`);
   }
 }
 

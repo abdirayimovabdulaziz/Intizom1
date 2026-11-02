@@ -144,7 +144,97 @@ console.log('--- Production Xavfsizlik & Konfiguratsiya Testlari ---');
   console.log('✅ PASS: 7) Preview demo ma’lumotlari asosiy PostgreSQL bazasidan xavfsiz ajratildi');
 }
 
-// 8. CSRF Himoyasi: X-Requested-With yoki Authorization headeri yo'q bo'lsa 403 rad etilishi
+// 8. RPC xatosi bo'lganda to'g'ridan-to'g'ri jadval yozuvi (.from) chaqirilmasligi va qat'iy xato otilishi
+{
+  const supabaseRepo = new SupabaseUserStateRepository('https://example.supabase.co', 'dummy-key');
+  let fromCallCount = 0;
+  let rpcCalledWith: any = null;
+
+  const mockClient = {
+    rpc: async (fnName: string, params: any) => {
+      rpcCalledWith = { fnName, params };
+      return {
+        data: null,
+        error: { message: 'function save_user_snapshot() permission denied or failed' },
+      };
+    },
+    from: (_tableName: string) => {
+      fromCallCount++;
+      return {
+        select: () => ({ single: async () => ({ data: null, error: null }) }),
+        update: () => ({ eq: () => ({ eq: () => ({ select: () => ({ single: async () => ({}) }) }) }) }),
+        insert: () => ({ select: () => ({ single: async () => ({}) }) }),
+      };
+    },
+  };
+
+  (supabaseRepo as any).client = mockClient;
+
+  let threw = false;
+  try {
+    await supabaseRepo.save('real-user-12345', {
+      expectedRevision: 1,
+      operationId: 'op-failure-test',
+      snapshot: { tasks: [], habits: [], goals: [], expenses: [], activities: [] },
+    });
+  } catch (err: any) {
+    threw = true;
+    assert.match(err.message, /save_user_snapshot RPC xatosi/);
+  }
+
+  assert.strictEqual(threw, true, 'RPC xato berganda save() exception otishi shart');
+  assert.strictEqual(fromCallCount, 0, 'RPC xato berganda to‘g‘ridan-to‘g‘ri jadvalga (.from) yozish fallback chaqirilmasligi shart');
+  assert.strictEqual(rpcCalledWith.fnName, 'save_user_snapshot');
+  console.log('✅ PASS: 8) RPC xato berganda to‘g‘ridan-to‘g‘ri jadval yozuvi chaqirilmadi, xato otildi');
+}
+
+// 9. Revision conflict holati RPC orqali to'g'ridan-to'g'ri qaytarilishi
+{
+  const supabaseRepo = new SupabaseUserStateRepository('https://example.supabase.co', 'dummy-key');
+  let fromCallCount = 0;
+
+  const mockClient = {
+    rpc: async () => {
+      return {
+        data: {
+          status: 'conflict',
+          currentRevision: 5,
+          serverRecord: {
+            user_id: 'real-user-12345',
+            telegram_username: 'real_user',
+            telegram_first_name: 'Real User',
+            schema_version: 1,
+            revision: 5,
+            last_operation_id: 'other-op',
+            snapshot: { tasks: [], habits: [], goals: [], expenses: [], activities: [] },
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          },
+        },
+        error: null,
+      };
+    },
+    from: () => {
+      fromCallCount++;
+      return {};
+    },
+  };
+
+  (supabaseRepo as any).client = mockClient;
+
+  const result = await supabaseRepo.save('real-user-12345', {
+    expectedRevision: 4,
+    operationId: 'op-conflict-test',
+    snapshot: { tasks: [], habits: [], goals: [], expenses: [], activities: [] },
+  });
+
+  assert.strictEqual(result.status, 'conflict');
+  assert.strictEqual(result.currentRevision, 5);
+  assert.strictEqual(fromCallCount, 0, 'Conflict paytida hech qanday to‘g‘ridan-to‘g‘ri table query chaqirilmasligi kerak');
+  console.log('✅ PASS: 9) Revision conflict holati RPC orqali to‘g‘ridan-to‘g‘ri qaytarildi');
+}
+
+// 10. CSRF Himoyasi: X-Requested-With yoki Authorization headeri yo'q bo'lsa 403 rad etilishi
 async function testCsrfProtection() {
   const server = http.createServer(app);
   await new Promise<void>((resolve) => server.listen(0, resolve));
@@ -178,7 +268,7 @@ async function testCsrfProtection() {
     assert.strictEqual(logoutNoCsrf.status, 403, 'CSRF headerisiz logout 403 qaytarishi shart');
     const data = await logoutNoCsrf.json();
     assert.strictEqual(data.code, 'CSRF_FAILED');
-    console.log('✅ PASS: 8) CSRF himoyasi header bo‘lmagan so‘rovlarni muvaffaqiyatli to‘xtatdi');
+    console.log('✅ PASS: 10) CSRF himoyasi header bo‘lmagan so‘rovlarni muvaffaqiyatli to‘xtatdi');
   } finally {
     server.close();
   }

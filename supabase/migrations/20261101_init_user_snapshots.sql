@@ -1,8 +1,12 @@
 -- ==============================================================================
 -- Kunlik Yordamchi - PostgreSQL / Supabase Migration
+-- File: 20261101_init_user_snapshots.sql
 -- Table: user_snapshots
--- Stores verified domain snapshots per Telegram user with optimistic concurrency
--- and idempotency support.
+--
+-- MUHIM MIGRATSIYA TARTIBI:
+-- Yangi bo'sh bazada birinchi navbatda aynan ushbu fayl bajariladi (1-qadam).
+-- Ushbu fayl user_snapshots jadvali, indekslar, RLS qoidalari va bazaviy triggerlarni yaratadi.
+-- Ushbu fayldan so'ng 20261102_secure_save_user_snapshot.sql bajarilishi lozim (2-qadam).
 -- ==============================================================================
 
 -- 1. Create table
