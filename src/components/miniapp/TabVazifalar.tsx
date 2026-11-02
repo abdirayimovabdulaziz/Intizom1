@@ -106,7 +106,6 @@ export const TabVazifalar: React.FC<{
         notes: editNotes.trim() || undefined,
       });
 
-      triggerHaptic('success', settings.reminderSound);
       setEditingTask(null);
     } catch (err: any) {
       setEditError(err?.message || "Vazifani yangilashda xatolik yuz berdi.");
@@ -156,7 +155,6 @@ export const TabVazifalar: React.FC<{
         source: 'miniapp',
       });
 
-      triggerHaptic('success', settings.reminderSound);
       setTitle('');
       setNotes('');
       setCreateError('');
@@ -499,150 +497,152 @@ export const TabVazifalar: React.FC<{
         subtitle="Kunlik rejangizga topshiriq yoki uchrashuv kiriting"
         isDirty={!!title.trim()}
       >
-        <div className="space-y-4 py-1">
-          {createError && (
-            <div
-              role="alert"
-              className="p-3 bg-rose-500/20 border border-rose-500/40 rounded-xl text-xs text-rose-300 flex items-start gap-2"
-            >
-              <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
-              <span>{createError}</span>
-            </div>
-          )}
-
-          <form onSubmit={handleCreateTask} className="space-y-3.5">
-            {/* Title */}
-            <div>
-              <label htmlFor="task-create-title" className="block text-xs font-semibold text-slate-300 mb-1">
-                Vazifa nomi *
-              </label>
-              <input
-                id="task-create-title"
-                type="text"
-                value={title}
-                onChange={e => setTitle(e.target.value)}
-                placeholder="Vazifa nomini kiriting..."
-                required
-                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2.5 text-base sm:text-sm text-slate-100 placeholder-slate-500 focus-visible:ring-2 focus-visible:ring-sky-500 focus:outline-none"
-              />
-            </div>
-
-            {/* Quick Date Buttons */}
-            <div>
-              <label htmlFor="task-create-date" className="block text-xs font-semibold text-slate-300 mb-1.5">Sana</label>
-              <div className="flex items-center gap-2 mb-2">
-                <button
-                  type="button"
-                  onClick={() => setDateOffset(0)}
-                  className={`flex-1 py-2 min-h-[36px] rounded-xl text-xs font-semibold border transition-colors focus-visible:ring-2 focus-visible:ring-sky-500 focus:outline-none ${
-                    date === todayStr
-                      ? 'bg-sky-600 text-white border-transparent'
-                      : 'bg-slate-800 text-slate-300 border-slate-700'
-                  }`}
-                >
-                  Bugun
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setDateOffset(1)}
-                  className="flex-1 py-2 min-h-[36px] rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-colors focus-visible:ring-2 focus-visible:ring-sky-500 focus:outline-none"
-                >
-                  Ertaga
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setDateOffset(2)}
-                  className="flex-1 py-2 min-h-[36px] rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-colors focus-visible:ring-2 focus-visible:ring-sky-500 focus:outline-none"
-                >
-                  Indin
-                </button>
-              </div>
-              <input
-                id="task-create-date"
-                type="date"
-                value={date}
-                onChange={e => setDate(e.target.value)}
-                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-base sm:text-sm text-slate-100 focus-visible:ring-2 focus-visible:ring-sky-500 focus:outline-none"
-              />
-            </div>
-
-            {/* Time */}
-            <div>
-              <label htmlFor="task-create-time" className="block text-xs font-semibold text-slate-300 mb-1">
-                Vaqt (Eslatma uchun)
-              </label>
-              <input
-                id="task-create-time"
-                type="time"
-                value={time}
-                onChange={e => setTime(e.target.value)}
-                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-base sm:text-sm text-slate-100 focus-visible:ring-2 focus-visible:ring-sky-500 focus:outline-none"
-              />
-            </div>
-
-            {/* Category & Priority */}
-            <div className="grid grid-cols-2 gap-2.5">
-              <div>
-                <label htmlFor="task-create-category" className="block text-xs font-semibold text-slate-300 mb-1">Toifa</label>
-                <select
-                  id="task-create-category"
-                  value={category}
-                  onChange={e => setCategory(e.target.value as any)}
-                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-base sm:text-sm text-slate-100 focus-visible:ring-2 focus-visible:ring-sky-500 focus:outline-none"
-                >
-                  <option value="vazifa">Vazifa (Topshiriq)</option>
-                  <option value="uchrashuv">Uchrashuv</option>
-                </select>
-              </div>
-
-              <div>
-                <label htmlFor="task-create-priority" className="block text-xs font-semibold text-slate-300 mb-1">Muhimlik</label>
-                <select
-                  id="task-create-priority"
-                  value={priority}
-                  onChange={e => setPriority(e.target.value as any)}
-                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-base sm:text-sm text-slate-100 focus-visible:ring-2 focus-visible:ring-sky-500 focus:outline-none"
-                >
-                  <option value="low">Past</option>
-                  <option value="medium">O'rtacha</option>
-                  <option value="high">Yuqori</option>
-                </select>
-              </div>
-            </div>
-
-            {/* Notes */}
-            <div>
-              <label htmlFor="task-create-notes" className="block text-xs font-semibold text-slate-300 mb-1">
-                Izoh (Ixtiyoriy)
-              </label>
-              <input
-                id="task-create-notes"
-                type="text"
-                value={notes}
-                onChange={e => setNotes(e.target.value)}
-                placeholder="Qo'shimcha ma'lumotlar..."
-                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2.5 text-base sm:text-sm text-slate-100 placeholder-slate-500 focus-visible:ring-2 focus-visible:ring-sky-500 focus:outline-none"
-              />
-            </div>
-
-            <div className="pt-2 flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setIsAddModalOpen(false)}
-                className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold py-2.5 min-h-[44px] rounded-xl border border-slate-700 transition-colors focus-visible:ring-2 focus-visible:ring-sky-500 focus:outline-none"
+        {({ requestClose }) => (
+          <div className="space-y-4 py-1">
+            {createError && (
+              <div
+                role="alert"
+                className="p-3 bg-rose-500/20 border border-rose-500/40 rounded-xl text-xs text-rose-300 flex items-start gap-2"
               >
-                Bekor qilish
-              </button>
-              <button
-                type="submit"
-                disabled={isSubmittingCreate}
-                className="flex-1 bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white text-xs font-bold py-2.5 min-h-[44px] rounded-xl shadow-md transition-colors focus-visible:ring-2 focus-visible:ring-sky-500 focus:outline-none"
-              >
-                {isSubmittingCreate ? "Saqlanmoqda..." : "Saqlash"}
-              </button>
-            </div>
-          </form>
-        </div>
+                <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                <span>{createError}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleCreateTask} className="space-y-3.5">
+              {/* Title */}
+              <div>
+                <label htmlFor="task-create-title" className="block text-xs font-semibold text-slate-300 mb-1">
+                  Vazifa nomi *
+                </label>
+                <input
+                  id="task-create-title"
+                  type="text"
+                  value={title}
+                  onChange={e => setTitle(e.target.value)}
+                  placeholder="Vazifa nomini kiriting..."
+                  required
+                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2.5 text-base sm:text-sm text-slate-100 placeholder-slate-500 focus-visible:ring-2 focus-visible:ring-sky-500 focus:outline-none"
+                />
+              </div>
+
+              {/* Quick Date Buttons */}
+              <div>
+                <label htmlFor="task-create-date" className="block text-xs font-semibold text-slate-300 mb-1.5">Sana</label>
+                <div className="flex items-center gap-2 mb-2">
+                  <button
+                    type="button"
+                    onClick={() => setDateOffset(0)}
+                    className={`flex-1 py-2 min-h-[36px] rounded-xl text-xs font-semibold border transition-colors focus-visible:ring-2 focus-visible:ring-sky-500 focus:outline-none ${
+                      date === todayStr
+                        ? 'bg-sky-600 text-white border-transparent'
+                        : 'bg-slate-800 text-slate-300 border-slate-700'
+                    }`}
+                  >
+                    Bugun
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setDateOffset(1)}
+                    className="flex-1 py-2 min-h-[36px] rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-colors focus-visible:ring-2 focus-visible:ring-sky-500 focus:outline-none"
+                  >
+                    Ertaga
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setDateOffset(2)}
+                    className="flex-1 py-2 min-h-[36px] rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-colors focus-visible:ring-2 focus-visible:ring-sky-500 focus:outline-none"
+                  >
+                    Indin
+                  </button>
+                </div>
+                <input
+                  id="task-create-date"
+                  type="date"
+                  value={date}
+                  onChange={e => setDate(e.target.value)}
+                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-base sm:text-sm text-slate-100 focus-visible:ring-2 focus-visible:ring-sky-500 focus:outline-none"
+                />
+              </div>
+
+              {/* Time */}
+              <div>
+                <label htmlFor="task-create-time" className="block text-xs font-semibold text-slate-300 mb-1">
+                  Vaqt (Eslatma uchun)
+                </label>
+                <input
+                  id="task-create-time"
+                  type="time"
+                  value={time}
+                  onChange={e => setTime(e.target.value)}
+                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-base sm:text-sm text-slate-100 focus-visible:ring-2 focus-visible:ring-sky-500 focus:outline-none"
+                />
+              </div>
+
+              {/* Category & Priority */}
+              <div className="grid grid-cols-2 gap-2.5">
+                <div>
+                  <label htmlFor="task-create-category" className="block text-xs font-semibold text-slate-300 mb-1">Toifa</label>
+                  <select
+                    id="task-create-category"
+                    value={category}
+                    onChange={e => setCategory(e.target.value as any)}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-base sm:text-sm text-slate-100 focus-visible:ring-2 focus-visible:ring-sky-500 focus:outline-none"
+                  >
+                    <option value="vazifa">Vazifa (Topshiriq)</option>
+                    <option value="uchrashuv">Uchrashuv</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label htmlFor="task-create-priority" className="block text-xs font-semibold text-slate-300 mb-1">Muhimlik</label>
+                  <select
+                    id="task-create-priority"
+                    value={priority}
+                    onChange={e => setPriority(e.target.value as any)}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-base sm:text-sm text-slate-100 focus-visible:ring-2 focus-visible:ring-sky-500 focus:outline-none"
+                  >
+                    <option value="low">Past</option>
+                    <option value="medium">O'rtacha</option>
+                    <option value="high">Yuqori</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Notes */}
+              <div>
+                <label htmlFor="task-create-notes" className="block text-xs font-semibold text-slate-300 mb-1">
+                  Izoh (Ixtiyoriy)
+                </label>
+                <input
+                  id="task-create-notes"
+                  type="text"
+                  value={notes}
+                  onChange={e => setNotes(e.target.value)}
+                  placeholder="Qo'shimcha ma'lumotlar..."
+                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2.5 text-base sm:text-sm text-slate-100 placeholder-slate-500 focus-visible:ring-2 focus-visible:ring-sky-500 focus:outline-none"
+                />
+              </div>
+
+              <div className="pt-2 flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={requestClose}
+                  className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold py-2.5 min-h-[44px] rounded-xl border border-slate-700 transition-colors focus-visible:ring-2 focus-visible:ring-sky-500 focus:outline-none"
+                >
+                  Bekor qilish
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmittingCreate}
+                  className="flex-1 bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white text-xs font-bold py-2.5 min-h-[44px] rounded-xl shadow-md transition-colors focus-visible:ring-2 focus-visible:ring-sky-500 focus:outline-none"
+                >
+                  {isSubmittingCreate ? "Saqlanmoqda..." : "Saqlash"}
+                </button>
+              </div>
+            </form>
+          </div>
+        )}
       </ModalSheet>
 
       {/* Edit Task Modal */}
@@ -656,123 +656,125 @@ export const TabVazifalar: React.FC<{
         subtitle="Nomini yoki vaqtini to'g'irlash"
         isDirty={!!(editingTask && editTitle.trim() && editTitle !== editingTask.title)}
       >
-        <div className="space-y-4 py-1">
-          {editError && (
-            <div
-              role="alert"
-              className="p-3 bg-rose-500/20 border border-rose-500/40 rounded-xl text-xs text-rose-300 flex items-start gap-2"
-            >
-              <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
-              <span>{editError}</span>
-            </div>
-          )}
+        {({ requestClose }) => (
+          <div className="space-y-4 py-1">
+            {editError && (
+              <div
+                role="alert"
+                className="p-3 bg-rose-500/20 border border-rose-500/40 rounded-xl text-xs text-rose-300 flex items-start gap-2"
+              >
+                <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                <span>{editError}</span>
+              </div>
+            )}
 
-          <form onSubmit={handleUpdateTask} className="space-y-3.5">
-            {/* Title */}
-            <div>
-              <label htmlFor="task-edit-title" className="block text-xs font-semibold text-slate-300 mb-1">
-                Vazifa nomi *
-              </label>
-              <input
-                id="task-edit-title"
-                type="text"
-                value={editTitle}
-                onChange={e => setEditTitle(e.target.value)}
-                placeholder="Vazifa nomini kiriting..."
-                required
-                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2.5 text-base sm:text-sm text-slate-100 placeholder-slate-500 focus-visible:ring-2 focus-visible:ring-sky-500 focus:outline-none"
-              />
-            </div>
-
-            {/* Date */}
-            <div>
-              <label htmlFor="task-edit-date" className="block text-xs font-semibold text-slate-300 mb-1.5">Sana</label>
-              <input
-                id="task-edit-date"
-                type="date"
-                value={editDate}
-                onChange={e => setEditDate(e.target.value)}
-                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2 text-base sm:text-sm text-slate-100 focus-visible:ring-2 focus-visible:ring-sky-500 focus:outline-none"
-              />
-            </div>
-
-            {/* Time */}
-            <div>
-              <label htmlFor="task-edit-time" className="block text-xs font-semibold text-slate-300 mb-1">
-                Vaqt (Eslatma uchun)
-              </label>
-              <input
-                id="task-edit-time"
-                type="time"
-                value={editTime}
-                onChange={e => setEditTime(e.target.value)}
-                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2 text-base sm:text-sm text-slate-100 focus-visible:ring-2 focus-visible:ring-sky-500 focus:outline-none"
-              />
-            </div>
-
-            {/* Category & Priority */}
-            <div className="grid grid-cols-2 gap-2.5">
+            <form onSubmit={handleUpdateTask} className="space-y-3.5">
+              {/* Title */}
               <div>
-                <label htmlFor="task-edit-category" className="block text-xs font-semibold text-slate-300 mb-1">Toifa</label>
-                <select
-                  id="task-edit-category"
-                  value={editCategory}
-                  onChange={e => setEditCategory(e.target.value as any)}
-                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-base sm:text-sm text-slate-100 focus-visible:ring-2 focus-visible:ring-sky-500 focus:outline-none"
-                >
-                  <option value="vazifa">Vazifa (Topshiriq)</option>
-                  <option value="uchrashuv">Uchrashuv</option>
-                </select>
+                <label htmlFor="task-edit-title" className="block text-xs font-semibold text-slate-300 mb-1">
+                  Vazifa nomi *
+                </label>
+                <input
+                  id="task-edit-title"
+                  type="text"
+                  value={editTitle}
+                  onChange={e => setEditTitle(e.target.value)}
+                  placeholder="Vazifa nomini kiriting..."
+                  required
+                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2.5 text-base sm:text-sm text-slate-100 placeholder-slate-500 focus-visible:ring-2 focus-visible:ring-sky-500 focus:outline-none"
+                />
               </div>
 
+              {/* Date */}
               <div>
-                <label htmlFor="task-edit-priority" className="block text-xs font-semibold text-slate-300 mb-1">Muhimlik</label>
-                <select
-                  id="task-edit-priority"
-                  value={editPriority}
-                  onChange={e => setEditPriority(e.target.value as any)}
+                <label htmlFor="task-edit-date" className="block text-xs font-semibold text-slate-300 mb-1">Sana</label>
+                <input
+                  id="task-edit-date"
+                  type="date"
+                  value={editDate}
+                  onChange={e => setEditDate(e.target.value)}
                   className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-base sm:text-sm text-slate-100 focus-visible:ring-2 focus-visible:ring-sky-500 focus:outline-none"
-                >
-                  <option value="low">Past</option>
-                  <option value="medium">O'rtacha</option>
-                  <option value="high">Yuqori</option>
-                </select>
+                />
               </div>
-            </div>
 
-            {/* Notes */}
-            <div>
-              <label htmlFor="task-edit-notes" className="block text-xs font-semibold text-slate-300 mb-1">
-                Izoh (Ixtiyoriy)
-              </label>
-              <input
-                id="task-edit-notes"
-                type="text"
-                value={editNotes}
-                onChange={e => setEditNotes(e.target.value)}
-                placeholder="Qo'shimcha ma'lumotlar..."
-                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2 text-base sm:text-sm text-slate-100 placeholder-slate-500 focus-visible:ring-2 focus-visible:ring-sky-500 focus:outline-none"
-              />
-            </div>
+              {/* Time */}
+              <div>
+                <label htmlFor="task-edit-time" className="block text-xs font-semibold text-slate-300 mb-1">
+                  Vaqt (Eslatma uchun)
+                </label>
+                <input
+                  id="task-edit-time"
+                  type="time"
+                  value={editTime}
+                  onChange={e => setEditTime(e.target.value)}
+                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-base sm:text-sm text-slate-100 focus-visible:ring-2 focus-visible:ring-sky-500 focus:outline-none"
+                />
+              </div>
 
-            <div className="pt-2 flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setEditingTask(null)}
-                className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold py-2.5 min-h-[44px] rounded-xl border border-slate-700 transition-colors focus-visible:ring-2 focus-visible:ring-sky-500 focus:outline-none"
-              >
-                Bekor qilish
-              </button>
-              <button
-                type="submit"
-                disabled={isSubmittingEdit}
-                className="flex-1 bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white text-xs font-bold py-2.5 min-h-[44px] rounded-xl shadow-md transition-colors focus-visible:ring-2 focus-visible:ring-sky-500 focus:outline-none"
-              >
-                {isSubmittingEdit ? "Saqlanmoqda..." : "O'zgarishlarni Saqlash"}
-              </button>
-            </div>
-          </form>
-        </div>
+              {/* Category & Priority */}
+              <div className="grid grid-cols-2 gap-2.5">
+                <div>
+                  <label htmlFor="task-edit-category" className="block text-xs font-semibold text-slate-300 mb-1">Toifa</label>
+                  <select
+                    id="task-edit-category"
+                    value={editCategory}
+                    onChange={e => setEditCategory(e.target.value as any)}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-base sm:text-sm text-slate-100 focus-visible:ring-2 focus-visible:ring-sky-500 focus:outline-none"
+                  >
+                    <option value="vazifa">Vazifa (Topshiriq)</option>
+                    <option value="uchrashuv">Uchrashuv</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label htmlFor="task-edit-priority" className="block text-xs font-semibold text-slate-300 mb-1">Muhimlik</label>
+                  <select
+                    id="task-edit-priority"
+                    value={editPriority}
+                    onChange={e => setEditPriority(e.target.value as any)}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-base sm:text-sm text-slate-100 focus-visible:ring-2 focus-visible:ring-sky-500 focus:outline-none"
+                  >
+                    <option value="low">Past</option>
+                    <option value="medium">O'rtacha</option>
+                    <option value="high">Yuqori</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Notes */}
+              <div>
+                <label htmlFor="task-edit-notes" className="block text-xs font-semibold text-slate-300 mb-1">
+                  Izoh (Ixtiyoriy)
+                </label>
+                <input
+                  id="task-edit-notes"
+                  type="text"
+                  value={editNotes}
+                  onChange={e => setEditNotes(e.target.value)}
+                  placeholder="Qo'shimcha ma'lumotlar..."
+                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2 text-base sm:text-sm text-slate-100 placeholder-slate-500 focus-visible:ring-2 focus-visible:ring-sky-500 focus:outline-none"
+                />
+              </div>
+
+              <div className="pt-2 flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={requestClose}
+                  className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold py-2.5 min-h-[44px] rounded-xl border border-slate-700 transition-colors focus-visible:ring-2 focus-visible:ring-sky-500 focus:outline-none"
+                >
+                  Bekor qilish
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmittingEdit}
+                  className="flex-1 bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white text-xs font-bold py-2.5 min-h-[44px] rounded-xl shadow-md transition-colors focus-visible:ring-2 focus-visible:ring-sky-500 focus:outline-none"
+                >
+                  {isSubmittingEdit ? "Saqlanmoqda..." : "O'zgarishlarni Saqlash"}
+                </button>
+              </div>
+            </form>
+          </div>
+        )}
       </ModalSheet>
 
       {/* Safe bottom spacer */}

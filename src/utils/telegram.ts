@@ -170,7 +170,7 @@ export const subscribeTelegramViewport = (onUpdate?: () => void): (() => void) =
 };
 
 // ============================================================================
-// Modal BackButton Stack Manager
+// Modal BackButton Stack & Scroll Lock Manager
 // Supports nested modals and closes the topmost modal on Telegram BackButton
 // ============================================================================
 type ModalCloseHandler = () => void;
@@ -208,36 +208,101 @@ function updateTelegramBackButtonVisibility(): void {
 
 /**
  * Registers a modal or sheet with the Telegram BackButton stack.
+ * If already in stack, updates callback in place WITHOUT moving it to top.
  * Returns an unregister function to be called on modal close or unmount.
  */
 export const registerModalBackButton = (id: string, onClose: ModalCloseHandler): (() => void) => {
-  // Remove any previous entry with this ID
   const existingIdx = modalStack.findIndex(m => m.id === id);
   if (existingIdx !== -1) {
-    modalStack.splice(existingIdx, 1);
+    // Preserve stack position: update callback in place
+    modalStack[existingIdx].onClose = onClose;
+  } else {
+    modalStack.push({ id, onClose });
   }
-
-  modalStack.push({ id, onClose });
   updateTelegramBackButtonVisibility();
 
   return () => {
-    const idx = modalStack.findIndex(m => m.id === id);
-    if (idx !== -1) {
-      modalStack.splice(idx, 1);
-    }
-    updateTelegramBackButtonVisibility();
+    unregisterModalBackButton(id);
   };
+};
+
+export const unregisterModalBackButton = (id: string): void => {
+  const idx = modalStack.findIndex(m => m.id === id);
+  if (idx !== -1) {
+    modalStack.splice(idx, 1);
+  }
+  updateTelegramBackButtonVisibility();
+};
+
+export const isTopModal = (id: string): boolean => {
+  return modalStack.length > 0 && modalStack[modalStack.length - 1].id === id;
+};
+
+export const getModalStackLength = (): number => {
+  return modalStack.length;
+};
+
+export const clearModalStackForTesting = (): void => {
+  modalStack.length = 0;
+  updateTelegramBackButtonVisibility();
+};
+
+// Set-based body scroll lock manager: resilient against React Strict Mode and nested sheets
+const activeScrollLockedModals = new Set<string>();
+let originalBodyOverflow = '';
+
+export const lockBodyScroll = (id: string): void => {
+  if (typeof document === 'undefined') return;
+  if (activeScrollLockedModals.size === 0) {
+    originalBodyOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+  }
+  activeScrollLockedModals.add(id);
+};
+
+export const unlockBodyScroll = (id: string): void => {
+  if (typeof document === 'undefined') return;
+  activeScrollLockedModals.delete(id);
+  if (activeScrollLockedModals.size === 0) {
+    document.body.style.overflow = originalBodyOverflow;
+  }
+};
+
+export const getActiveScrollLocksCount = (): number => {
+  return activeScrollLockedModals.size;
+};
+
+export const clearScrollLocksForTesting = (): void => {
+  activeScrollLockedModals.clear();
+  if (typeof document !== 'undefined') {
+    document.body.style.overflow = originalBodyOverflow;
+  }
+};
+
+// ============================================================================
+// Haptic Feedback Manager
+// Respects global setting (e.g. settings.reminderSound) and individual call overrides
+// ============================================================================
+let hapticGloballyEnabled = true;
+
+export const setHapticEnabled = (enabled: boolean): void => {
+  hapticGloballyEnabled = enabled;
+};
+
+export const isHapticEnabled = (): boolean => {
+  return hapticGloballyEnabled;
 };
 
 /**
  * Triggers Telegram Haptic Feedback with fallback to navigator.vibrate.
- * Safe to call; only runs when enabled.
+ * Suppressed if haptic is globally disabled or if enabled parameter is false.
  */
 export const triggerHaptic = (
   type: 'light' | 'medium' | 'heavy' | 'success' | 'warning' | 'error' | 'selection' = 'medium',
-  enabled: boolean = true
+  enabled?: boolean
 ): void => {
-  if (!enabled || typeof window === 'undefined') return;
+  const isAllowed = enabled !== undefined ? (enabled && hapticGloballyEnabled) : hapticGloballyEnabled;
+  if (!isAllowed || typeof window === 'undefined') return;
 
   const haptic = window.Telegram?.WebApp?.HapticFeedback;
 

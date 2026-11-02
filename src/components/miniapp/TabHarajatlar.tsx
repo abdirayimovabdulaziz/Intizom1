@@ -89,7 +89,6 @@ export const TabHarajatlar: React.FC<{
         notes: editNotes.trim() || undefined,
       });
 
-      triggerHaptic('success', settings.reminderSound);
       setEditingExpense(null);
     } catch (err: any) {
       setEditError(err?.message || "Xarajatni yangilashda xatolik yuz berdi.");
@@ -157,7 +156,6 @@ export const TabHarajatlar: React.FC<{
         source: 'miniapp',
       });
 
-      triggerHaptic('success', settings.reminderSound);
       setTitle('');
       setAmount(currency === 'USD' ? 50 : 25000);
       setNotes('');
@@ -345,7 +343,6 @@ export const TabHarajatlar: React.FC<{
                     onClick={() => {
                       if (window.confirm("Ushbu xarajatni o'chirmoqchimisiz?")) {
                         deleteExpense(exp.id);
-                        triggerHaptic('warning', settings.reminderSound);
                       }
                     }}
                     aria-label={`Xarajatni o'chirish: ${exp.title}`}
@@ -371,7 +368,8 @@ export const TabHarajatlar: React.FC<{
         subtitle="Kunlik xarajat yoki xaridni belgilang"
         isDirty={!!title.trim()}
       >
-        <div className="space-y-4 py-1">
+        {({ requestClose }) => (
+          <div className="space-y-4 py-1">
           {createError && (
             <div
               role="alert"
@@ -503,7 +501,7 @@ export const TabHarajatlar: React.FC<{
             <div className="pt-2 flex items-center gap-2">
               <button
                 type="button"
-                onClick={() => setIsAddModalOpen(false)}
+                onClick={requestClose}
                 className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold py-2.5 min-h-[44px] rounded-xl border border-slate-700 transition-colors focus-visible:ring-2 focus-visible:ring-emerald-500 focus:outline-none"
               >
                 Bekor qilish
@@ -518,6 +516,7 @@ export const TabHarajatlar: React.FC<{
             </div>
           </form>
         </div>
+        )}
       </ModalSheet>
 
       {/* Edit Expense Modal */}
@@ -531,7 +530,8 @@ export const TabHarajatlar: React.FC<{
         subtitle="Summa, valyuta yoki toifani to'g'irlash"
         isDirty={!!(editingExpense && (editTitle !== editingExpense.title || editAmount !== editingExpense.amount))}
       >
-        <div className="space-y-4 py-1">
+        {({ requestClose }) => (
+          <div className="space-y-4 py-1">
           {editError && (
             <div
               role="alert"
@@ -658,7 +658,7 @@ export const TabHarajatlar: React.FC<{
             <div className="pt-2 flex items-center gap-2">
               <button
                 type="button"
-                onClick={() => setEditingExpense(null)}
+                onClick={requestClose}
                 className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold py-2.5 min-h-[44px] rounded-xl border border-slate-700 transition-colors focus-visible:ring-2 focus-visible:ring-emerald-500 focus:outline-none"
               >
                 Bekor qilish
@@ -673,6 +673,7 @@ export const TabHarajatlar: React.FC<{
             </div>
           </form>
         </div>
+        )}
       </ModalSheet>
 
       {/* Safe bottom spacer */}

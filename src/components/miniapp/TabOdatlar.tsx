@@ -150,7 +150,6 @@ export const TabOdatlar: React.FC<{
         linkedGoalId: editLinkedGoalId || undefined,
       });
 
-      triggerHaptic('success', settings.reminderSound);
       setEditingHabit(null);
     } catch (err: any) {
       setEditError(err?.message || "Odatni yangilashda xatolik yuz berdi.");
@@ -233,7 +232,6 @@ export const TabOdatlar: React.FC<{
         linkedGoalId: linkedGoalId || undefined,
       });
 
-      triggerHaptic('success', settings.reminderSound);
       // Reset Form
       setTitle('');
       setDosage('');
@@ -549,15 +547,17 @@ export const TabOdatlar: React.FC<{
         description="Kunlik yoki haftalik yangi odatni rejalashtirish"
         isDirty={isAddDirty}
       >
-        {createError && (
-          <div
-            role="alert"
-            className="flex items-start gap-2 bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs rounded-xl p-3"
-          >
-            <AlertCircle className="w-4 h-4 shrink-0 text-rose-400 mt-0.5" />
-            <span>{createError}</span>
-          </div>
-        )}
+        {({ requestClose }) => (
+          <>
+            {createError && (
+              <div
+                role="alert"
+                className="flex items-start gap-2 bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs rounded-xl p-3"
+              >
+                <AlertCircle className="w-4 h-4 shrink-0 text-rose-400 mt-0.5" />
+                <span>{createError}</span>
+              </div>
+            )}
 
         <form onSubmit={handleCreateHabit} className="space-y-4">
           {/* Type selector */}
@@ -825,10 +825,7 @@ export const TabOdatlar: React.FC<{
           <div className="pt-2 flex items-center gap-2">
             <button
               type="button"
-              onClick={() => {
-                setIsAddModalOpen(false);
-                setCreateError('');
-              }}
+              onClick={requestClose}
               className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium py-3 rounded-xl border border-slate-700 min-h-[44px]"
             >
               Bekor qilish
@@ -842,6 +839,8 @@ export const TabOdatlar: React.FC<{
             </button>
           </div>
         </form>
+        </>
+        )}
       </ModalSheet>
 
       {/* Edit Habit Modal */}
@@ -855,15 +854,17 @@ export const TabOdatlar: React.FC<{
         description="Odat nomi, davriyligi va maqsadlarini o'zgartirish"
         isDirty={isEditDirty}
       >
-        {editError && (
-          <div
-            role="alert"
-            className="flex items-start gap-2 bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs rounded-xl p-3"
-          >
-            <AlertCircle className="w-4 h-4 shrink-0 text-rose-400 mt-0.5" />
-            <span>{editError}</span>
-          </div>
-        )}
+        {({ requestClose }) => (
+          <>
+            {editError && (
+              <div
+                role="alert"
+                className="flex items-start gap-2 bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs rounded-xl p-3"
+              >
+                <AlertCircle className="w-4 h-4 shrink-0 text-rose-400 mt-0.5" />
+                <span>{editError}</span>
+              </div>
+            )}
 
         <form onSubmit={handleUpdateHabit} className="space-y-4">
           {/* Habit Type Switcher */}
@@ -1114,10 +1115,7 @@ export const TabOdatlar: React.FC<{
           <div className="pt-2 flex items-center gap-2">
             <button
               type="button"
-              onClick={() => {
-                setEditingHabit(null);
-                setEditError('');
-              }}
+              onClick={requestClose}
               className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium py-3 rounded-xl border border-slate-700 min-h-[44px]"
             >
               Bekor qilish
@@ -1131,6 +1129,8 @@ export const TabOdatlar: React.FC<{
             </button>
           </div>
         </form>
+        </>
+        )}
       </ModalSheet>
     </div>
   );

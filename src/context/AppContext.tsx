@@ -27,7 +27,7 @@ import {
   buildActivityCreatePayload,
   processEntityCreationFromParsed,
 } from '../utils/uzbekNlp';
-import { triggerHaptic } from '../utils/telegram';
+import { triggerHaptic, setHapticEnabled } from '../utils/telegram';
 import {
   calculatePostponedTask,
   calculateHabitIntakeDecision,
@@ -277,6 +277,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY_SETTINGS, JSON.stringify(settings));
+    setHapticEnabled(settings.reminderSound);
   }, [settings]);
 
   // Adjust active date when day rolls over or window focus / visibility changes
@@ -329,14 +330,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const updateTask = (id: string, updates: Partial<Task>) => {
     setTasks(prev => prev.map(t => (t.id === id ? { ...t, ...updates } : t)));
+    triggerHaptic('light');
   };
 
   const toggleTaskComplete = (id: string) => {
+    const targetTask = tasks.find(t => t.id === id);
+    if (!targetTask) return;
+
+    const isDone = targetTask.status === 'completed';
+    // Trigger haptic strictly outside of the state updater
+    triggerHaptic(isDone ? 'selection' : 'success');
+
     setTasks(prev =>
       prev.map(t => {
         if (t.id === id) {
-          const isDone = t.status === 'completed';
-          triggerHaptic(isDone ? 'selection' : 'success');
           return {
             ...t,
             status: isDone ? 'pending' : 'completed',

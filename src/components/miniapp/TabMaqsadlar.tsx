@@ -153,7 +153,6 @@ export const TabMaqsadlar: React.FC<{
         deadline: editDeadline,
         notes: editNotes.trim() || undefined,
       });
-      triggerHaptic('success');
       setEditingGoal(null);
       setEditError('');
     } catch (err: any) {
@@ -219,7 +218,6 @@ export const TabMaqsadlar: React.FC<{
         progressLogs: [],
         internalHabits: [],
       });
-      triggerHaptic('success');
       setTitle('');
       setNotes('');
       setCreateError('');
@@ -244,7 +242,6 @@ export const TabMaqsadlar: React.FC<{
     setIsSubmittingLog(true);
     try {
       logGoalProgress(selectedGoalIdForLog, amt, logNote.trim() || undefined);
-      triggerHaptic('success');
       setSelectedGoalIdForLog(null);
       setLogNote('');
       setLogError('');
@@ -775,7 +772,9 @@ export const TabMaqsadlar: React.FC<{
             description={targetGoal?.title || ''}
             isDirty={isLogDirty}
           >
-            {targetGoal && (
+            {({ requestClose }) => (
+              <>
+                {targetGoal && (
               <form onSubmit={handleApplyLog} className="space-y-4">
                 {logError && (
                   <div
@@ -870,10 +869,7 @@ export const TabMaqsadlar: React.FC<{
                 <div className="pt-2 flex items-center gap-2">
                   <button
                     type="button"
-                    onClick={() => {
-                      setSelectedGoalIdForLog(null);
-                      setLogError('');
-                    }}
+                    onClick={requestClose}
                     className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium py-3 rounded-xl border border-slate-700 min-h-[44px]"
                   >
                     Bekor qilish
@@ -888,7 +884,9 @@ export const TabMaqsadlar: React.FC<{
                 </div>
               </form>
             )}
-          </ModalSheet>
+          </>
+        )}
+      </ModalSheet>
         );
       })()}
 
@@ -903,15 +901,17 @@ export const TabMaqsadlar: React.FC<{
         description="Katta maqsad, marra va muddatni belgilash"
         isDirty={isAddDirty}
       >
-        {createError && (
-          <div
-            role="alert"
-            className="flex items-start gap-2 bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs rounded-xl p-3"
-          >
-            <AlertCircle className="w-4 h-4 shrink-0 text-rose-400 mt-0.5" />
-            <span>{createError}</span>
-          </div>
-        )}
+        {({ requestClose }) => (
+          <>
+            {createError && (
+              <div
+                role="alert"
+                className="flex items-start gap-2 bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs rounded-xl p-3"
+              >
+                <AlertCircle className="w-4 h-4 shrink-0 text-rose-400 mt-0.5" />
+                <span>{createError}</span>
+              </div>
+            )}
 
         <form onSubmit={handleCreateGoal} className="space-y-4">
           {/* Goal Type Switcher */}
@@ -1089,10 +1089,7 @@ export const TabMaqsadlar: React.FC<{
           <div className="pt-2 flex items-center gap-2">
             <button
               type="button"
-              onClick={() => {
-                setIsAddModalOpen(false);
-                setCreateError('');
-              }}
+              onClick={requestClose}
               className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium py-3 rounded-xl border border-slate-700 min-h-[44px]"
             >
               Bekor qilish
@@ -1106,6 +1103,8 @@ export const TabMaqsadlar: React.FC<{
             </button>
           </div>
         </form>
+        </>
+        )}
       </ModalSheet>
 
       {/* Edit Goal Modal */}
@@ -1119,15 +1118,17 @@ export const TabMaqsadlar: React.FC<{
         description="Maqsad nomi, marrasi, joriy ko'rsatkichi yoki muddatini o'zgartirish"
         isDirty={isEditDirty}
       >
-        {editError && (
-          <div
-            role="alert"
-            className="flex items-start gap-2 bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs rounded-xl p-3"
-          >
-            <AlertCircle className="w-4 h-4 shrink-0 text-rose-400 mt-0.5" />
-            <span>{editError}</span>
-          </div>
-        )}
+        {({ requestClose }) => (
+          <>
+            {editError && (
+              <div
+                role="alert"
+                className="flex items-start gap-2 bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs rounded-xl p-3"
+              >
+                <AlertCircle className="w-4 h-4 shrink-0 text-rose-400 mt-0.5" />
+                <span>{editError}</span>
+              </div>
+            )}
 
         <form onSubmit={handleUpdateGoal} className="space-y-4">
           {/* Goal Type Switcher */}
@@ -1309,10 +1310,7 @@ export const TabMaqsadlar: React.FC<{
           <div className="pt-2 flex items-center gap-2">
             <button
               type="button"
-              onClick={() => {
-                setEditingGoal(null);
-                setEditError('');
-              }}
+              onClick={requestClose}
               className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium py-3 rounded-xl border border-slate-700 min-h-[44px]"
             >
               Bekor qilish
@@ -1326,6 +1324,8 @@ export const TabMaqsadlar: React.FC<{
             </button>
           </div>
         </form>
+        </>
+        )}
       </ModalSheet>
         </>
       )}

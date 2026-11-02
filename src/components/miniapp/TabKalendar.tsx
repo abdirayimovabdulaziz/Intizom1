@@ -275,7 +275,6 @@ export const TabKalendar: React.FC = () => {
         addActivity(payload);
       }
 
-      triggerHaptic('success', settings.reminderSound);
       setIsActivityModalOpen(false);
     } catch (err: any) {
       setFormError(err?.message || "Faoliyatni saqlashda xatolik yuz berdi.");
@@ -287,7 +286,6 @@ export const TabKalendar: React.FC = () => {
   const handleDeleteActivity = (id: string) => {
     if (window.confirm("Haqiqatan ham ushbu faoliyatni o'chirmoqchimisiz?")) {
       deleteActivity(id);
-      triggerHaptic('warning', settings.reminderSound);
       setIsActivityModalOpen(false);
     }
   };
@@ -808,7 +806,8 @@ export const TabKalendar: React.FC = () => {
         subtitle="Mashg'ulot, kitob, sayr yoki boshqa bajargan amalingizni kiriting"
         isDirty={isFormDirty}
       >
-        <div className="space-y-4 py-1">
+        {({ requestClose }) => (
+          <div className="space-y-4 py-1">
           {formError && (
             <div
               role="alert"
@@ -1014,7 +1013,7 @@ export const TabKalendar: React.FC = () => {
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => setIsActivityModalOpen(false)}
+                  onClick={requestClose}
                   className="px-4 py-2.5 min-h-[44px] bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-medium transition-colors focus-visible:ring-2 focus-visible:ring-sky-500 focus:outline-none"
                 >
                   Bekor qilish
@@ -1030,6 +1029,7 @@ export const TabKalendar: React.FC = () => {
             </div>
           </form>
         </div>
+        )}
       </ModalSheet>
 
       {/* Safe bottom spacer */}
