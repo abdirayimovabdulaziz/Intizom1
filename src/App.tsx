@@ -5,6 +5,8 @@
 
 import React, { useEffect } from 'react';
 import { AppProvider, useApp } from './context/AppContext';
+import { SyncProvider } from './context/SyncContext';
+import { SyncModals } from './components/miniapp/SyncModals';
 import { NotificationBanner } from './components/NotificationBanner';
 import { BotChatSimulator } from './components/BotChatSimulator';
 import { MiniAppContainer } from './components/miniapp/MiniAppContainer';
@@ -40,6 +42,9 @@ function MainLayout() {
           </div>
         )}
       </main>
+
+      {/* Sync Modals: Conflict Resolution, Migration, and Account Switch */}
+      <SyncModals />
     </div>
   );
 }
@@ -47,7 +52,9 @@ function MainLayout() {
 export default function App() {
   return (
     <AppProvider>
-      <MainLayout />
+      <SyncProvider>
+        <MainLayout />
+      </SyncProvider>
     </AppProvider>
   );
 }

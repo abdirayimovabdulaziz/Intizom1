@@ -10,6 +10,7 @@ import {
   ArrowLeft,
 } from 'lucide-react';
 import { triggerHaptic } from '../../utils/telegram';
+import { SyncStatusBadge } from './SyncStatusBadge';
 
 export const TabSozlamalar: React.FC = () => {
   const {
@@ -86,6 +87,9 @@ export const TabSozlamalar: React.FC = () => {
           <p className="text-xs text-slate-400">Shaxsiy profil, eslatmalar va ma'lumotlar</p>
         </div>
       </div>
+
+      {/* Cloud Synchronization Status Badge */}
+      <SyncStatusBadge />
 
       {/* 3. PROFILE & PREFERENCES FORM */}
       <form onSubmit={handleSave} className="space-y-4">

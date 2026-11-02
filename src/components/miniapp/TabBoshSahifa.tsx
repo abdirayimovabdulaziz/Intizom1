@@ -32,6 +32,8 @@ import {
   Bell,
 } from 'lucide-react';
 
+import { SyncStatusBadge } from './SyncStatusBadge';
+
 export const TabBoshSahifa: React.FC<{
   onOpenAddTask: () => void;
   onOpenAddHabit: () => void;
@@ -111,6 +113,8 @@ export const TabBoshSahifa: React.FC<{
             <span>{formatUzbekDateLabel(todayStr)}</span>
             <span aria-hidden="true">·</span>
             <span>{settings.timezone.split(' ')[0]}</span>
+            <span aria-hidden="true">·</span>
+            <SyncStatusBadge compact />
           </div>
           <h2 className="text-2xl font-extrabold tracking-tight text-white mt-1">
             Xayrli kun, {settings.name}! 👋
