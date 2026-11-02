@@ -156,4 +156,12 @@ BEGIN
         );
     END IF;
 END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp;
+
+-- Revoke execute privileges from PUBLIC, anon, and authenticated
+REVOKE ALL ON FUNCTION public.save_user_snapshot(TEXT, BIGINT, TEXT, JSONB, INTEGER, TEXT, TEXT) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.save_user_snapshot(TEXT, BIGINT, TEXT, JSONB, INTEGER, TEXT, TEXT) FROM anon;
+REVOKE ALL ON FUNCTION public.save_user_snapshot(TEXT, BIGINT, TEXT, JSONB, INTEGER, TEXT, TEXT) FROM authenticated;
+
+-- Grant execute strictly and exclusively to service_role (backend server only)
+GRANT EXECUTE ON FUNCTION public.save_user_snapshot(TEXT, BIGINT, TEXT, JSONB, INTEGER, TEXT, TEXT) TO service_role;

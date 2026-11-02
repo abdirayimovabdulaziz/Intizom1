@@ -108,6 +108,7 @@ export class InMemoryUserStateRepository implements IUserStateRepository {
  */
 export class SupabaseUserStateRepository implements IUserStateRepository {
   private client: SupabaseClient;
+  private demoFallbackRepo = new InMemoryUserStateRepository();
 
   constructor(supabaseUrl: string, serviceRoleKey: string) {
     this.client = createClient(supabaseUrl, serviceRoleKey, {
@@ -123,6 +124,11 @@ export class SupabaseUserStateRepository implements IUserStateRepository {
   }
 
   async get(userId: string): Promise<UserSnapshotRecord | null> {
+    // Isolate preview demo user from real PostgreSQL tables
+    if (userId === 'demo-preview-user') {
+      return this.demoFallbackRepo.get(userId);
+    }
+
     const { data, error } = await this.client
       .from('user_snapshots')
       .select('*')
@@ -149,6 +155,11 @@ export class SupabaseUserStateRepository implements IUserStateRepository {
   }
 
   async save(userId: string, input: SaveSnapshotInput): Promise<SaveSnapshotResult> {
+    // Isolate preview demo user from real PostgreSQL tables
+    if (userId === 'demo-preview-user') {
+      return this.demoFallbackRepo.save(userId, input);
+    }
+
     // Attempt to invoke the atomic PostgreSQL stored procedure first
     const { data: rpcData, error: rpcError } = await this.client.rpc('save_user_snapshot', {
       p_user_id: userId,
@@ -336,20 +347,31 @@ let repositoryInstance: IUserStateRepository | null = null;
 export function getRepository(): IUserStateRepository {
   if (repositoryInstance) return repositoryInstance;
 
+  const isProd = process.env.NODE_ENV === 'production';
   const supabaseUrl = process.env.SUPABASE_URL?.trim();
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
 
   if (supabaseUrl && serviceRoleKey && !supabaseUrl.includes('MY_SUPABASE')) {
     try {
       repositoryInstance = new SupabaseUserStateRepository(supabaseUrl, serviceRoleKey);
-      console.log('✅ [Repository] Supabase PostgreSQL repository ulandi.');
+      console.log('✅ [Repository] Supabase PostgreSQL repository muvaffaqiyatli ulandi.');
       return repositoryInstance;
     } catch (e: any) {
-      console.warn('⚠️ [Repository] Supabase ulanishida xatolik, in-memory repository ishlatiladi:', e?.message);
+      if (isProd) {
+        throw new Error(`[FATAL DATABASE ERROR] Production muhitida Supabase PostgreSQL ga ulanib bo‘lmadi: ${e?.message}`);
+      }
+      console.warn('⚠️ [Repository] Supabase ulanishida xatolik, in-memory repository ishlatiladi (faqat dev/test):', e?.message);
     }
   }
 
-  console.log('ℹ️ [Repository] Supabase ma‘lumotlari topilmadi. In-Memory transactional repository ishlatilmoqda.');
+  // In production, fallback to in-memory repository is strictly forbidden
+  if (isProd) {
+    throw new Error(
+      '[FATAL CONFIG] Production muhitida SUPABASE_URL va SUPABASE_SERVICE_ROLE_KEY to‘liq sozlanishi shart! In-Memory fallback productionda qat‘iyan taqiqlangan.'
+    );
+  }
+
+  console.log('ℹ️ [Repository] Supabase ma‘lumotlari topilmadi. In-Memory transactional repository ishlatilmoqda (faqat dev/test rejimida).');
   repositoryInstance = new InMemoryUserStateRepository();
   return repositoryInstance;
 }

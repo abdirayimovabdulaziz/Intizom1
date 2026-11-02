@@ -14,17 +14,18 @@ import { validateDomainSnapshot } from './server/validateSnapshot';
 import { getRepository } from './server/repository';
 import { createRateLimiter } from './server/rateLimiter';
 import { TelegramUser } from './server/types';
+import { validateServerConfig } from './server/config';
 
 dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+const serverConfig = validateServerConfig(process.env);
 const app = express();
-const PORT = Number(process.env.PORT) || 3000;
-const SESSION_SECRET = process.env.SESSION_SECRET || 'kunlik-yordamchi-default-dev-secret-32-chars';
-const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
-const ALLOW_DEMO_AUTH = process.env.ALLOW_DEMO_AUTH === 'true' || process.env.NODE_ENV !== 'production';
+const PORT = serverConfig.port;
+const SESSION_SECRET = serverConfig.sessionSecret;
+const TELEGRAM_BOT_TOKEN = serverConfig.telegramBotToken;
 
 // Basic middlewares
 app.use(cookieParser());
@@ -92,6 +93,23 @@ function requireAuth(req: Request, res: Response, next: NextFunction) {
   if (!req.user || !req.user.id) {
     res.status(401).json({
       error: 'Autentifikatsiya talab qilinadi. Sessiya mavjud emas yoki muddati tugagan.',
+    });
+    return;
+  }
+  next();
+}
+
+// CSRF Protection middleware for state mutation requests
+function requireCsrfProtection(req: Request, res: Response, next: NextFunction) {
+  const hasCustomHeader =
+    Boolean(req.headers['x-requested-with']) ||
+    Boolean(req.headers['authorization']) ||
+    Boolean(req.headers['x-csrf-token']);
+
+  if (!hasCustomHeader) {
+    res.status(403).json({
+      error: 'CSRF tekshiruvidan o‘tmadi. So‘rovda X-Requested-With yoki Authorization headeri talab qilinadi.',
+      code: 'CSRF_FAILED',
     });
     return;
   }
@@ -175,9 +193,10 @@ app.post('/api/auth/telegram', authRateLimiter, (req: Request, res: Response) =>
 
 // Demo mode session for browser preview outside Telegram
 app.post('/api/auth/demo-session', authRateLimiter, (_req: Request, res: Response) => {
-  if (!ALLOW_DEMO_AUTH) {
+  if (serverConfig.isProd || !serverConfig.allowDemoAuth) {
     res.status(403).json({
-      error: 'Demo rejim production muhitida o‘chirilgan.',
+      error: 'Demo rejim production muhitida qat‘iyan taqiqlangan va butunlay yopiq.',
+      code: 'DEMO_FORBIDDEN_IN_PRODUCTION',
     });
     return;
   }
@@ -223,8 +242,8 @@ app.get('/api/auth/me', (req: Request, res: Response) => {
   });
 });
 
-// Logout and clear session
-app.post('/api/auth/logout', (_req: Request, res: Response) => {
+// Logout and clear session (requires CSRF protection)
+app.post('/api/auth/logout', requireCsrfProtection, (_req: Request, res: Response) => {
   res.clearCookie('kunlik_session', {
     httpOnly: true,
     secure: true,
@@ -259,8 +278,8 @@ app.get('/api/sync/state', requireAuth, async (req: Request, res: Response) => {
   }
 });
 
-// Atomic conditional save snapshot with optimistic concurrency & idempotency
-app.post('/api/sync/save', requireAuth, syncSaveRateLimiter, async (req: Request, res: Response) => {
+// Atomic conditional save snapshot with optimistic concurrency & idempotency (strictly CSRF protected)
+app.post('/api/sync/save', requireAuth, requireCsrfProtection, syncSaveRateLimiter, async (req: Request, res: Response) => {
   try {
     const userId = req.user!.id;
     const { expectedRevision, operationId, snapshot, schemaVersion } = req.body;
@@ -487,6 +506,10 @@ O'zbek tilida ilhomlantiruvchi, samimiy va amaliy 3-4 jumlali haftalik sarhisob 
 // ==============================================================================
 
 async function startServer() {
+  // Enforce configuration validation before listening
+  validateServerConfig(process.env);
+  getRepository();
+
   const isProd = process.env.NODE_ENV === 'production';
 
   if (!isProd) {
@@ -509,9 +532,10 @@ async function startServer() {
 }
 
 // Export app for test suites
-export { app };
+export { app, startServer };
 
 // Start server if run directly
-if (process.env.NODE_ENV !== 'test') {
+const isDirectRun = Boolean(process.argv[1] && path.resolve(process.argv[1]) === path.resolve(__filename));
+if (isDirectRun && process.env.NODE_ENV !== 'test') {
   startServer();
 }

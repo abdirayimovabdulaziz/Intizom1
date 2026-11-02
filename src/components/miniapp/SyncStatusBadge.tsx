@@ -21,6 +21,13 @@ export const SyncStatusBadge: React.FC<{ compact?: boolean }> = ({ compact = fal
           bgColor: 'bg-sky-950/40 border-sky-500/30 text-sky-300',
         };
       case 'idle':
+        if (!isLiveDatabase) {
+          return {
+            icon: <CheckCircle className="w-3.5 h-3.5 text-slate-400" />,
+            label: user?.isDemo ? 'Demo rejimda saqlandi' : 'Lokalda saqlandi (Baza ulanmagan)',
+            bgColor: 'bg-slate-800/60 border-slate-700/50 text-slate-300',
+          };
+        }
         return {
           icon: <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />,
           label: cloudRevision ? `Bulutda saqlandi (v${cloudRevision})` : 'Bulutda saqlandi',
