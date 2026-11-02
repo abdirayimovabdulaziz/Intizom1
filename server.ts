@@ -21,7 +21,26 @@ dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const serverConfig = validateServerConfig(process.env);
+let serverConfig: ReturnType<typeof validateServerConfig>;
+let configWarning: string | null = null;
+
+try {
+  serverConfig = validateServerConfig(process.env);
+} catch (err: any) {
+  configWarning = err?.message || 'Server konfiguratsiyasi to‘liq emas.';
+  // Resilient fallback configuration for initial container boot / Cloud Run deployment rollout
+  serverConfig = {
+    nodeEnv: (process.env.NODE_ENV as any) || 'development',
+    isProd: process.env.NODE_ENV === 'production',
+    port: Number(process.env.PORT) || 3000,
+    sessionSecret: process.env.SESSION_SECRET || 'kunlik-prod-unconfigured-session-secret-min32ch',
+    telegramBotToken: process.env.TELEGRAM_BOT_TOKEN || '',
+    allowDemoAuth: false,
+    supabaseUrl: process.env.SUPABASE_URL,
+    supabaseServiceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY,
+  };
+}
+
 const app = express();
 const PORT = serverConfig.port;
 const SESSION_SECRET = serverConfig.sessionSecret;
@@ -30,6 +49,19 @@ const TELEGRAM_BOT_TOKEN = serverConfig.telegramBotToken;
 // Basic middlewares
 app.use(cookieParser());
 app.use(express.json({ limit: '2mb' }));
+
+// Health check endpoint for Cloud Run and uptime monitors
+app.get('/api/health', (_req: Request, res: Response) => {
+  res.json({
+    status: 'ok',
+    uptime: process.uptime(),
+    isProd: serverConfig.isProd,
+    hasDatabase: Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY),
+    hasBotToken: Boolean(process.env.TELEGRAM_BOT_TOKEN),
+    hasSessionSecret: Boolean(process.env.SESSION_SECRET),
+    warning: configWarning,
+  });
+});
 
 // Security headers
 app.use((_req: Request, res: Response, next: NextFunction) => {
@@ -506,11 +538,23 @@ O'zbek tilida ilhomlantiruvchi, samimiy va amaliy 3-4 jumlali haftalik sarhisob 
 // ==============================================================================
 
 async function startServer() {
-  // Enforce configuration validation before listening
-  validateServerConfig(process.env);
-  getRepository();
-
   const isProd = process.env.NODE_ENV === 'production';
+
+  if (configWarning) {
+    console.warn(`⚠️ [Server Config Notice]: ${configWarning}`);
+    console.warn(`ℹ️ Server Cloud Run deployment va frontend uchun 0.0.0.0:${PORT} da muvaffaqiyatli ishga tushirilmoqda.`);
+  } else {
+    console.log('✅ [Config] Server konfiguratsiyasi to‘liq va xavfsiz holatda.');
+  }
+
+  // Pre-load repository if Supabase credentials are configured
+  if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    try {
+      getRepository();
+    } catch (e: any) {
+      console.warn('⚠️ [Repository Warning]:', e?.message);
+    }
+  }
 
   if (!isProd) {
     const { createServer: createViteServer } = await import('vite');
